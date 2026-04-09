@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -52,7 +53,13 @@ func (r *DefaultRunner) Run(ctx context.Context, name string, args ...string) ([
 }
 
 func (r *DefaultRunner) Start(ctx context.Context, name string, args ...string) (*exec.Cmd, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
+	// Don't use CommandContext — we don't want the emulator killed when
+	// the request context (e.g., session create HTTP request) completes.
+	// The emulator is a long-running process managed by the pool.
+	cmd := exec.Command(name, args...)
+
+	// Create a new process group so the emulator survives independently
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	log.Debug().
 		Str("cmd", name).
