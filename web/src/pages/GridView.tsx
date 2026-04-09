@@ -32,12 +32,7 @@ export function GridView() {
   const cols = liveInstances.length <= 3 ? 3 : liveInstances.length <= 8 ? 4 : 5;
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Live Grid</h1>
-        <span className="text-sm text-gray-500">{liveInstances.length} device{liveInstances.length > 1 ? 's' : ''}</span>
-      </div>
-
+    <div>
       <div className={`grid gap-3`} style={{ gridTemplateColumns: `repeat(${cols}, 1fr)` }}>
         {liveInstances.map(inst => (
           <StreamTile key={inst.id} instance={inst} onClick={() => navigate(`/live/${inst.id}`)} />
@@ -79,29 +74,22 @@ function StreamTile({ instance, onClick }: { instance: DeviceInstance; onClick: 
   }, [instance.id]);
 
   return (
-    <div onClick={onClick}
-      className="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden cursor-pointer hover:border-emerald-400/50 transition group max-w-[200px]">
-      <div className="relative">
+    <div onClick={onClick} className="cursor-pointer group">
+      <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden hover:border-emerald-400/50 transition w-[220px] h-[400px] relative">
         {!connected ? (
-          <div className="aspect-[9/16] flex items-center justify-center bg-gray-950">
+          <div className="w-full h-full flex items-center justify-center bg-gray-950">
             <div className="animate-spin w-5 h-5 border-2 border-gray-700 border-t-emerald-400 rounded-full" />
           </div>
         ) : (
-          <canvas ref={canvasRef} className="w-full aspect-[9/16] object-contain" />
+          <canvas ref={canvasRef} className="w-full h-full object-cover" />
         )}
-        {/* Overlay on hover */}
-        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition flex items-center justify-center">
-          <span className="opacity-0 group-hover:opacity-100 text-white text-sm font-medium transition">Open</span>
-        </div>
+        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition" />
       </div>
-      <div className="px-3 py-2 flex items-center justify-between">
-        <div className="min-w-0">
-          <div className="text-xs font-medium text-gray-300 truncate">{instance.device_name}</div>
-          <div className="text-[10px] text-gray-600">{instance.serial}</div>
-        </div>
+      <div className="mt-1.5 flex items-center gap-1.5 px-0.5">
         <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
           instance.state === 'allocated' ? 'bg-blue-400' : 'bg-emerald-400'
         }`} />
+        <span className="text-[11px] text-gray-400 truncate">{instance.device_name}</span>
       </div>
     </div>
   );
