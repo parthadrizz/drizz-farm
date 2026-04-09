@@ -79,7 +79,8 @@
       "Bash(rm -f ~/.drizz-farm/drizz-farm.pid)",
       "Bash(git commit -m 'fix: live view 60% smaller \\(180px wide\\):*)",
       "Bash(python3 -c \"import json,sys; print\\(json.load\\(sys.stdin\\).get\\('output','none'\\)\\)\")",
-      "Bash(python3 -c \"import json,sys; print\\(json.load\\(sys.stdin\\).get\\('output','EMPTY'\\)\\)\")"
+      "Bash(python3 -c \"import json,sys; print\\(json.load\\(sys.stdin\\).get\\('output','EMPTY'\\)\\)\")",
+      "Bash(git commit -m 'fix: integration tests all passing — fixed root endpoint test for embedded dashboard:*)"
     ]
   }
 }
