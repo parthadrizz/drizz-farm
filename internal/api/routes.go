@@ -59,6 +59,7 @@ func RegisterRoutes(r chi.Router, cfg *config.Config, p *pool.Pool, b *session.B
 		// Screen streaming + input (WebSocket)
 		r.Get("/sessions/{id}/screen", screenH.StreamScreen)
 		r.Get("/sessions/{id}/input", screenH.SendInput)
+		r.Get("/sessions/{id}/logcat", screenH.StreamLogcat)
 
 		// Device simulation
 		r.Post("/sessions/{id}/gps", devH.SetGPS)

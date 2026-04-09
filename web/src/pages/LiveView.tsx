@@ -123,10 +123,11 @@ export function LiveView() {
               className="w-[240px] h-[533px] cursor-crosshair rounded" style={{ imageRendering: 'auto' }} />
           )}
         </div>
-        <div className="flex gap-1 mt-2 justify-center">
+        <div className="flex gap-1 mt-2 justify-center flex-wrap">
           <button onClick={() => sendInput('back')} className="px-3 py-1 bg-gray-800 rounded text-[10px] hover:bg-gray-700">◀ Back</button>
           <button onClick={() => sendInput('home')} className="px-3 py-1 bg-gray-800 rounded text-[10px] hover:bg-gray-700">● Home</button>
           <button onClick={() => sendInput('recent')} className="px-3 py-1 bg-gray-800 rounded text-[10px] hover:bg-gray-700">■ Recent</button>
+          <button onClick={() => { if (id) api.execADB(id, 'am kill-all'); }} className="px-3 py-1 bg-red-900/50 text-red-400 rounded text-[10px] hover:bg-red-900/70">✕ Close All</button>
         </div>
       </div>
 
@@ -134,7 +135,7 @@ export function LiveView() {
       <div className="flex-1 space-y-3 overflow-y-auto max-h-[600px]">
         {/* GPS */}
         <Panel title="GPS">
-          <div className="flex gap-2 flex-wrap">
+          <div className="flex gap-2 flex-wrap mb-2">
             {[
               { label: 'San Francisco', lat: 37.7749, lng: -122.4194 },
               { label: 'New York', lat: 40.7128, lng: -74.006 },
@@ -146,56 +147,69 @@ export function LiveView() {
               <Chip key={loc.label} active={activeGPS === loc.label} onClick={() => { if (id) { api.setGPS(id, loc.lat, loc.lng); setActiveGPS(loc.label); } }}>{loc.label}</Chip>
             ))}
           </div>
-        </Panel>
-
-        {/* Network */}
-        <Panel title="Network">
-          <div className="flex gap-2 flex-wrap">
-            {['2g', '3g', '4g', '5g', 'wifi_slow', 'wifi_fast', 'offline'].map(p => (
-              <Chip key={p} active={activeNetwork === p} onClick={() => { if (id) { api.setNetwork(id, p); setActiveNetwork(p); } }}>{p}</Chip>
-            ))}
+          <div className="flex gap-2 items-center">
+            <input type="text" placeholder="lat" id="gps-lat" className="w-20 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-[10px] font-mono focus:outline-none focus:border-emerald-400" />
+            <input type="text" placeholder="lng" id="gps-lng" className="w-20 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-[10px] font-mono focus:outline-none focus:border-emerald-400" />
+            <button onClick={() => {
+              const lat = parseFloat((document.getElementById('gps-lat') as HTMLInputElement)?.value);
+              const lng = parseFloat((document.getElementById('gps-lng') as HTMLInputElement)?.value);
+              if (id && !isNaN(lat) && !isNaN(lng)) { api.setGPS(id, lat, lng); setActiveGPS(`${lat},${lng}`); }
+            }} className="px-2 py-1 bg-emerald-500/20 text-emerald-400 border border-emerald-500/50 rounded text-[10px] hover:bg-emerald-500/30">Set</button>
           </div>
         </Panel>
 
-        {/* Battery */}
-        <Panel title="Battery">
-          <div className="flex gap-2 flex-wrap">
-            {[100, 75, 50, 25, 10, 5].map(l => (
-              <Chip key={l} active={activeBattery === l} onClick={() => { if (id) { api.setBattery(id, l, l > 20 ? 'ac' : 'none'); setActiveBattery(l); } }}>{l}%</Chip>
-            ))}
-          </div>
-        </Panel>
+        {/* Network + Battery side by side */}
+        <div className="grid grid-cols-2 gap-3">
+          <Panel title="Network">
+            <div className="flex gap-1.5 flex-wrap">
+              {['2g', '3g', '4g', '5g', 'wifi_slow', 'wifi_fast', 'offline'].map(p => (
+                <Chip key={p} active={activeNetwork === p} onClick={() => { if (id) { api.setNetwork(id, p); setActiveNetwork(p); } }}>{p}</Chip>
+              ))}
+            </div>
+          </Panel>
+          <Panel title="Battery">
+            <div className="flex gap-1.5 flex-wrap">
+              {[100, 75, 50, 25, 10, 5].map(l => (
+                <Chip key={l} active={activeBattery === l} onClick={() => { if (id) { api.setBattery(id, l, l > 20 ? 'ac' : 'none'); setActiveBattery(l); } }}>{l}%</Chip>
+              ))}
+            </div>
+          </Panel>
+        </div>
 
-        {/* Orientation */}
-        <Panel title="Orientation">
-          <div className="flex gap-2">
-            {[
-              { label: 'Portrait', r: 0 },
-              { label: 'Landscape ←', r: 1 },
-              { label: 'Reverse', r: 2 },
-              { label: 'Landscape →', r: 3 },
-            ].map(o => (
-              <Chip key={o.r} active={activeRotation === o.r} onClick={() => { if (id) { api.setOrientation(id, o.r); setActiveRotation(o.r); } }}>{o.label}</Chip>
-            ))}
-          </div>
-        </Panel>
-
-        {/* Dark Mode */}
-        <Panel title="Appearance">
-          <div className="flex gap-2">
-            <Chip active={activeDark === true} onClick={() => { if (id) { api.setDarkMode(id, true); setActiveDark(true); } }}>Dark</Chip>
-            <Chip active={activeDark === false} onClick={() => { if (id) { api.setDarkMode(id, false); setActiveDark(false); } }}>Light</Chip>
-          </div>
-        </Panel>
-
-        {/* Locale */}
-        <Panel title="Locale">
-          <div className="flex gap-2 flex-wrap">
-            {['en-US', 'ja-JP', 'hi-IN', 'de-DE', 'fr-FR', 'zh-CN', 'ar-SA', 'ko-KR'].map(l => (
-              <Chip key={l} active={activeLocale === l} mono onClick={() => { if (id) { api.setLocale(id, l); setActiveLocale(l); } }}>{l}</Chip>
-            ))}
-          </div>
-        </Panel>
+        {/* Orientation + Appearance + Locale side by side */}
+        <div className="grid grid-cols-3 gap-3">
+          <Panel title="Orientation">
+            <div className="flex gap-1.5 flex-wrap">
+              {[
+                { label: '↑', r: 0 },
+                { label: '←', r: 1 },
+                { label: '↓', r: 2 },
+                { label: '→', r: 3 },
+              ].map(o => (
+                <Chip key={o.r} active={activeRotation === o.r} onClick={() => { if (id) { api.setOrientation(id, o.r); setActiveRotation(o.r); } }}>{o.label}</Chip>
+              ))}
+            </div>
+          </Panel>
+          <Panel title="Appearance">
+            <div className="flex gap-1.5">
+              <Chip active={activeDark === true} onClick={() => { if (id) { api.setDarkMode(id, true); setActiveDark(true); } }}>Dark</Chip>
+              <Chip active={activeDark === false} onClick={() => { if (id) { api.setDarkMode(id, false); setActiveDark(false); } }}>Light</Chip>
+            </div>
+          </Panel>
+          <Panel title="Locale">
+            <select value={activeLocale} onChange={e => { if (id) { api.setLocale(id, e.target.value); setActiveLocale(e.target.value); } }}
+              className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-[10px] font-mono focus:outline-none focus:border-emerald-400">
+              <option value="">Select...</option>
+              {['en-US','en-GB','es-ES','es-MX','pt-BR','fr-FR','de-DE','it-IT','nl-NL','ru-RU','pl-PL','tr-TR',
+                'ja-JP','ko-KR','zh-CN','zh-TW','hi-IN','bn-IN','ta-IN','te-IN','mr-IN','gu-IN','kn-IN','ml-IN',
+                'ar-SA','he-IL','th-TH','vi-VN','id-ID','ms-MY','fil-PH','sv-SE','da-DK','nb-NO','fi-FI',
+                'uk-UA','cs-CZ','ro-RO','hu-HU','el-GR','bg-BG','hr-HR','sk-SK','sl-SI',
+                'sw-KE','am-ET','af-ZA'].map(l => (
+                <option key={l} value={l}>{l}</option>
+              ))}
+            </select>
+          </Panel>
+        </div>
 
         {/* Deeplink */}
         <Panel title="Deep Link">
@@ -220,7 +234,49 @@ export function LiveView() {
           </div>
           {adbOutput && <pre className="mt-1 text-[9px] text-gray-500 font-mono bg-gray-950 p-2 rounded max-h-24 overflow-auto">{adbOutput}</pre>}
         </Panel>
+
+        {/* Logcat */}
+        <LogcatPanel instanceId={id || ''} />
       </div>
+    </div>
+  );
+}
+
+function LogcatPanel({ instanceId }: { instanceId: string }) {
+  const logRef = useRef<HTMLPreElement>(null);
+  const [lines, setLines] = useState<string[]>([]);
+  const [paused, setPaused] = useState(false);
+
+  useEffect(() => {
+    if (!instanceId) return;
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${proto}//${window.location.host}/api/v1/sessions/${instanceId}/logcat`);
+
+    ws.onmessage = (e) => {
+      if (paused) return;
+      const newLines = e.data.split('\n').filter((l: string) => l.trim());
+      setLines(prev => [...prev.slice(-200), ...newLines]);
+      if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+    };
+
+    return () => ws.close();
+  }, [instanceId, paused]);
+
+  return (
+    <div className="bg-gray-900 border border-gray-800 rounded-lg">
+      <div className="flex items-center justify-between px-3 py-1.5 border-b border-gray-800">
+        <span className="text-[10px] text-gray-500 uppercase tracking-wider">Logcat</span>
+        <div className="flex gap-2">
+          <button onClick={() => setPaused(!paused)}
+            className={`text-[10px] px-2 py-0.5 rounded ${paused ? 'bg-yellow-500/20 text-yellow-400' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}>
+            {paused ? 'Resume' : 'Pause'}
+          </button>
+          <button onClick={() => setLines([])} className="text-[10px] px-2 py-0.5 bg-gray-800 text-gray-400 rounded hover:bg-gray-700">Clear</button>
+        </div>
+      </div>
+      <pre ref={logRef} className="p-2 text-[8px] font-mono text-gray-500 h-[150px] overflow-auto leading-tight whitespace-pre-wrap">
+        {lines.length === 0 ? 'Waiting for logs...' : lines.join('\n')}
+      </pre>
     </div>
   );
 }

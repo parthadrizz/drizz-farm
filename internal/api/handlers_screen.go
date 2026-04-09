@@ -96,6 +96,65 @@ func (h *screenHandlers) StreamScreen(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// StreamLogcat handles WS /api/v1/sessions/:id/logcat
+// Polls logcat and streams new lines.
+func (h *screenHandlers) StreamLogcat(w http.ResponseWriter, r *http.Request) {
+	sessionID := chi.URLParam(r, "id")
+
+	serial := ""
+	for _, inst := range h.pool.Status().Instances {
+		if inst.SessionID == sessionID || inst.ID == sessionID {
+			serial = inst.Serial
+			break
+		}
+	}
+	if serial == "" {
+		if inst, ok := h.pool.GetInstance(sessionID); ok && inst.Device != nil {
+			serial = inst.Device.Serial()
+		}
+	}
+	if serial == "" {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+
+	go func() {
+		for { _, _, err := conn.ReadMessage(); if err != nil { cancel(); return } }
+	}()
+
+	// Poll logcat every second, send last 20 lines
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			output, err := h.adb.Shell(ctx, serial, "logcat -d -t 30 -v brief")
+			if err != nil {
+				continue
+			}
+			if output != "" {
+				if writeErr := conn.WriteMessage(websocket.TextMessage, []byte(output)); writeErr != nil {
+					return
+				}
+			}
+			// Clear logcat buffer after reading
+			h.adb.Shell(ctx, serial, "logcat -c")
+		}
+	}
+}
+
 // SendInput handles WS /api/v1/sessions/:id/input
 // Receives touch/key events from browser and forwards to emulator.
 func (h *screenHandlers) SendInput(w http.ResponseWriter, r *http.Request) {
