@@ -42,14 +42,8 @@ func NewServer(cfg *config.Config, p *pool.Pool, b *session.Broker, lic *license
 	// Register API routes
 	RegisterRoutes(r, cfg, p, b, lic, deps)
 
-	// Root handler
-	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
-		JSON(w, http.StatusOK, map[string]string{
-			"service": "drizz-farm",
-			"version": "dev",
-			"docs":    fmt.Sprintf("http://%s:%d/api/v1", cfg.API.Host, cfg.API.Port),
-		})
-	})
+	// Serve embedded React dashboard for all non-API routes
+	r.NotFound(ServeDashboard().ServeHTTP)
 
 	addr := fmt.Sprintf("%s:%d", cfg.API.Host, cfg.API.Port)
 	return &Server{

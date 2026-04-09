@@ -10,9 +10,19 @@ LDFLAGS := -s -w \
 
 .PHONY: build test lint run clean fmt vet
 
-## build: Compile the binary
-build:
+## build: Build React dashboard + Go binary (single distributable)
+build: build-dashboard
 	go build -ldflags "$(LDFLAGS)" -o bin/$(BINARY) github.com/drizz-dev/drizz-farm
+
+## build-go: Build Go binary only (skip dashboard rebuild)
+build-go:
+	go build -ldflags "$(LDFLAGS)" -o bin/$(BINARY) github.com/drizz-dev/drizz-farm
+
+## build-dashboard: Build React dashboard and copy to embed directory
+build-dashboard:
+	cd web && npm run build
+	rm -rf internal/api/dashboard
+	cp -r web/dist internal/api/dashboard
 
 ## run: Build and run the daemon
 run: build
