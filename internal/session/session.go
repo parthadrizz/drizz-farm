@@ -1,6 +1,7 @@
 package session
 
 import (
+	"fmt"
 	"time"
 )
 
@@ -33,6 +34,21 @@ func (s SessionState) String() string {
 // MarshalJSON implements json.Marshaler.
 func (s SessionState) MarshalJSON() ([]byte, error) {
 	return []byte(`"` + s.String() + `"`), nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (s *SessionState) UnmarshalJSON(data []byte) error {
+	str := string(data)
+	if len(str) >= 2 && str[0] == '"' {
+		str = str[1 : len(str)-1]
+	}
+	for state, name := range stateNames {
+		if name == str {
+			*s = state
+			return nil
+		}
+	}
+	return fmt.Errorf("unknown session state: %s", str)
 }
 
 // Session represents a user's active session with an emulator.

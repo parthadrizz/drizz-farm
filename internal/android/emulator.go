@@ -175,21 +175,29 @@ func (e *EmulatorController) SaveCleanSnapshot(ctx context.Context, adb *ADBClie
 		bootTimeout = defaultBootTimeout
 	}
 
+	log.Info().Str("serial", serial).Msg("waiting for device to come online...")
+
 	// Wait for device to be online
 	if err := adb.WaitForDevice(ctx, serial, bootTimeout); err != nil {
 		return fmt.Errorf("save clean snapshot: %w", err)
 	}
+	log.Info().Str("serial", serial).Msg("device online, waiting for boot to complete...")
 
 	// Wait for boot to complete
 	if err := adb.WaitForBoot(ctx, serial, bootTimeout); err != nil {
 		return fmt.Errorf("save clean snapshot: %w", err)
 	}
+	log.Info().Str("serial", serial).Msg("boot complete, saving clean snapshot...")
 
 	// Brief pause to let things settle
 	time.Sleep(2 * time.Second)
 
 	// Save the clean snapshot
-	return e.SnapshotSave(ctx, adb, serial, cleanSnapshotName)
+	if err := e.SnapshotSave(ctx, adb, serial, cleanSnapshotName); err != nil {
+		return err
+	}
+	log.Info().Str("serial", serial).Msg("clean snapshot saved — future boots will be fast (~5s)")
+	return nil
 }
 
 // IsRunning checks if an emulator process is still alive.

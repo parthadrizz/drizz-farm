@@ -71,7 +71,7 @@ func runSessionCreate(cmd *cobra.Command, args []string) error {
 	}
 
 	body, _ := json.Marshal(req)
-	resp, err := http.Post("http://localhost:9401/api/v1/sessions", "application/json", bytes.NewReader(body))
+	resp, err := http.Post("http://127.0.0.1:9401/api/v1/sessions", "application/json", bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("connect to daemon: %w", err)
 	}
@@ -110,7 +110,7 @@ func runSessionCreate(cmd *cobra.Command, args []string) error {
 }
 
 func runSessionList(cmd *cobra.Command, args []string) error {
-	resp, err := http.Get("http://localhost:9401/api/v1/sessions")
+	resp, err := http.Get("http://127.0.0.1:9401/api/v1/sessions")
 	if err != nil {
 		return fmt.Errorf("connect to daemon: %w", err)
 	}
@@ -159,7 +159,7 @@ func runSessionList(cmd *cobra.Command, args []string) error {
 }
 
 func runSessionRelease(cmd *cobra.Command, args []string) error {
-	url := fmt.Sprintf("http://localhost:9401/api/v1/sessions/%s", sessionID)
+	url := fmt.Sprintf("http://127.0.0.1:9401/api/v1/sessions/%s", sessionID)
 	req, _ := http.NewRequest(http.MethodDelete, url, nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

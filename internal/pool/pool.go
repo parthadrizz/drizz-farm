@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand"
 	"sync"
 	"time"
 
@@ -63,24 +64,92 @@ func New(cfg *config.Config, sdk *android.SDK, runner android.CommandRunner) *Po
 	}
 }
 
-// Start initializes the pool and warms up emulators based on config.
-func (p *Pool) Start(ctx context.Context) error {
+// StartOptions configures which AVDs to boot.
+type StartOptions struct {
+	// AVDNames is an optional list of specific AVDs to boot.
+	// If empty, boots all warmup AVDs from config.
+	AVDNames []string
+}
+
+// Start initializes the pool and warms up emulators.
+// Pass nil options to boot all warmup AVDs from config.
+func (p *Pool) Start(ctx context.Context, opts *StartOptions) error {
 	ctx, p.cancel = context.WithCancel(ctx)
+
+	// Determine which AVDs to boot
+	type bootJob struct {
+		avdName     string
+		profileName string
+	}
+	var jobs []bootJob
+
+	if opts != nil && len(opts.AVDNames) > 0 {
+		// Boot specific AVDs
+		for _, name := range opts.AVDNames {
+			profileName := guessProfileForAVD(name, p.cfg)
+			jobs = append(jobs, bootJob{avdName: name, profileName: profileName})
+		}
+	} else {
+		// Discover ALL AVDs on the machine
+		allAVDs, err := p.avdMgr.List(ctx)
+		if err != nil {
+			log.Warn().Err(err).Msg("pool: could not list AVDs, falling back to config warmup")
+			// Fallback to config warmup
+			for _, w := range p.cfg.Pool.Warmup {
+				for i := 0; i < w.Count; i++ {
+					jobs = append(jobs, bootJob{
+						avdName:     android.AVDName(w.Profile, i),
+						profileName: w.Profile,
+					})
+				}
+			}
+		} else {
+			// Build jobs from all available AVDs
+			var candidates []bootJob
+			for _, avd := range allAVDs {
+				profileName := guessProfileForAVD(avd.Name, p.cfg)
+				candidates = append(candidates, bootJob{avdName: avd.Name, profileName: profileName})
+			}
+
+			// Shuffle and pick up to max_concurrent
+			rand.Shuffle(len(candidates), func(i, j int) {
+				candidates[i], candidates[j] = candidates[j], candidates[i]
+			})
+
+			limit := p.cfg.Pool.MaxConcurrent
+			if limit > len(candidates) {
+				limit = len(candidates)
+			}
+			jobs = candidates[:limit]
+
+			log.Info().
+				Int("available_avds", len(candidates)).
+				Int("selected", len(jobs)).
+				Msg("pool: randomly selected AVDs to boot")
+		}
+	}
 
 	log.Info().
 		Int("max_concurrent", p.cfg.Pool.MaxConcurrent).
-		Int("warmup_profiles", len(p.cfg.Pool.Warmup)).
+		Int("booting", len(jobs)).
 		Msg("pool: starting")
 
-	// Warm up emulators from config
-	for _, w := range p.cfg.Pool.Warmup {
-		for i := 0; i < w.Count; i++ {
-			if err := p.warmOne(ctx, w.Profile, i); err != nil {
-				log.Error().Err(err).Str("profile", w.Profile).Int("index", i).Msg("pool: failed to warm emulator")
-				// Don't fail startup for individual emulator failures
-			}
+	// Boot in parallel
+	var wg sync.WaitGroup
+	for _, job := range jobs {
+		if p.totalInstances() >= p.cfg.Pool.MaxConcurrent {
+			log.Warn().Str("avd", job.avdName).Msg("pool: max concurrent reached, skipping")
+			break
 		}
+		wg.Add(1)
+		go func(j bootJob) {
+			defer wg.Done()
+			if _, err := p.bootExisting(ctx, j.avdName, j.profileName); err != nil {
+				log.Error().Err(err).Str("avd", j.avdName).Msg("pool: failed to boot emulator")
+			}
+		}(job)
 	}
+	wg.Wait()
 
 	// Start maintenance loop
 	go p.maintenanceLoop(ctx)
@@ -245,26 +314,54 @@ func (p *Pool) GetInstance(id string) (*EmulatorInstance, bool) {
 	return inst, ok
 }
 
-// warmOne creates and boots a single emulator for the warmup pool.
+// warmOne boots an existing AVD for the warmup pool. Never creates AVDs.
 func (p *Pool) warmOne(ctx context.Context, profileName string, index int) error {
-	inst, err := p.createAndBoot(ctx, profileName, index)
+	avdName := android.AVDName(profileName, index)
+	inst, err := p.bootExisting(ctx, avdName, profileName)
 	if err != nil {
 		return err
 	}
-	_ = inst // Already registered in p.instances by createAndBoot
+	_ = inst
 	return nil
 }
 
 // createAndBoot creates an AVD, boots it, saves a clean snapshot, and registers it.
+// Used for on-demand allocation when pool is under capacity.
 func (p *Pool) createAndBoot(ctx context.Context, profileName string, index int) (*EmulatorInstance, error) {
 	profile, ok := p.cfg.Pool.Profiles.Android[profileName]
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", ErrProfileNotFound, profileName)
 	}
 
-	id := uuid.New().String()[:8]
 	avdName := android.AVDName(profileName, index)
 
+	// Create AVD
+	log.Info().Str("avd", avdName).Str("profile", profileName).Msg("pool: creating AVD")
+	if err := p.avdMgr.Create(ctx, avdName, profile); err != nil {
+		return nil, fmt.Errorf("create AVD %s: %w", avdName, err)
+	}
+
+	return p.bootExisting(ctx, avdName, profileName)
+}
+
+// bootExisting boots an AVD that already exists on disk.
+// Used by warmup (start) — never creates AVDs.
+func (p *Pool) bootExisting(ctx context.Context, avdName string, profileName string) (*EmulatorInstance, error) {
+	profile, ok := p.cfg.Pool.Profiles.Android[profileName]
+	if !ok {
+		return nil, fmt.Errorf("%w: %s", ErrProfileNotFound, profileName)
+	}
+
+	// Verify AVD exists
+	exists, err := p.avdMgr.Exists(ctx, avdName)
+	if err != nil {
+		return nil, fmt.Errorf("check AVD %s: %w", avdName, err)
+	}
+	if !exists {
+		return nil, fmt.Errorf("AVD %s does not exist (run 'drizz-farm create' first)", avdName)
+	}
+
+	id := uuid.New().String()[:8]
 	inst := &EmulatorInstance{
 		ID:          id,
 		AVDName:     avdName,
@@ -273,17 +370,10 @@ func (p *Pool) createAndBoot(ctx context.Context, profileName string, index int)
 		CreatedAt:   time.Now(),
 	}
 
-	// Register instance early so pool tracking is accurate
+	// Register instance early
 	p.mu.Lock()
 	p.instances[id] = inst
 	p.mu.Unlock()
-
-	// Create AVD (idempotent — uses --force)
-	log.Info().Str("avd", avdName).Str("profile", profileName).Msg("pool: creating AVD")
-	if err := p.avdMgr.Create(ctx, avdName, profile); err != nil {
-		p.removeInstance(id)
-		return nil, fmt.Errorf("create AVD %s: %w", avdName, err)
-	}
 
 	// Allocate ports
 	ports, err := p.portAlloc.Allocate()
@@ -305,7 +395,7 @@ func (p *Pool) createAndBoot(ctx context.Context, profileName string, index int)
 	bootOpts := android.BootOptions{
 		Profile:  profile,
 		Ports:    ports,
-		NoWindow: true,
+		NoWindow: !p.cfg.Pool.VisibleEmulators,
 		NoAudio:  true,
 	}
 
@@ -342,7 +432,35 @@ func (p *Pool) createAndBoot(ctx context.Context, profileName string, index int)
 		Str("profile", profileName).
 		Msg("pool: emulator warm and ready")
 
+	// Watch process — detect death immediately
+	go p.watchProcess(inst)
+
 	return inst, nil
+}
+
+// watchProcess waits for an emulator process to exit and removes it from the pool.
+func (p *Pool) watchProcess(inst *EmulatorInstance) {
+	if inst.Process == nil || inst.Process.Cmd == nil || inst.Process.Cmd.Process == nil {
+		return
+	}
+
+	// Wait blocks until the process exits
+	_, _ = inst.Process.Cmd.Process.Wait()
+
+	state := inst.GetState()
+	// If it's already being destroyed/reset by us, don't interfere
+	if state == StateDestroying || state == StateResetting {
+		return
+	}
+
+	log.Warn().
+		Str("instance", inst.ID).
+		Str("avd", inst.AVDName).
+		Str("previous_state", state.String()).
+		Msg("pool: emulator process exited unexpectedly")
+
+	p.portAlloc.Release(inst.Ports)
+	p.removeInstance(inst.ID)
 }
 
 // resetInstance restores the clean snapshot on an emulator.
@@ -376,7 +494,7 @@ func (p *Pool) removeInstance(id string) {
 
 // maintenanceLoop runs periodic pool maintenance.
 func (p *Pool) maintenanceLoop(ctx context.Context) {
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
 	for {
@@ -389,8 +507,31 @@ func (p *Pool) maintenanceLoop(ctx context.Context) {
 	}
 }
 
-// runMaintenance handles error recovery and warm pool replenishment.
+// runMaintenance checks process liveness, handles errors, and replenishes pool.
 func (p *Pool) runMaintenance(ctx context.Context) {
+	// 1. Check process liveness — detect manually killed emulators
+	p.mu.RLock()
+	var dead []*EmulatorInstance
+	for _, inst := range p.instances {
+		state := inst.GetState()
+		if state == StateWarm || state == StateAllocated {
+			if !p.emuCtrl.IsRunning(inst.Process) {
+				dead = append(dead, inst)
+			}
+		}
+	}
+	p.mu.RUnlock()
+
+	for _, inst := range dead {
+		log.Warn().
+			Str("instance", inst.ID).
+			Str("avd", inst.AVDName).
+			Msg("pool: emulator process died, removing from pool")
+		p.portAlloc.Release(inst.Ports)
+		p.removeInstance(inst.ID)
+	}
+
+	// 2. Handle errored instances
 	p.mu.RLock()
 	var errored []*EmulatorInstance
 	for _, inst := range p.instances {
@@ -400,7 +541,6 @@ func (p *Pool) runMaintenance(ctx context.Context) {
 	}
 	p.mu.RUnlock()
 
-	// Destroy errored instances
 	for _, inst := range errored {
 		log.Warn().Str("instance", inst.ID).Msg("pool: destroying errored instance")
 		_ = p.destroyInstance(inst)
@@ -441,4 +581,21 @@ func (p *Pool) totalInstances() int {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return len(p.instances)
+}
+
+// guessProfileForAVD tries to match an AVD name to a configured profile.
+// Falls back to the first configured profile if no match found.
+func guessProfileForAVD(avdName string, cfg *config.Config) string {
+	// Check if AVD name matches any warmup profile pattern (drizz_<profile>_N)
+	for profileName := range cfg.Pool.Profiles.Android {
+		prefix := "drizz_" + profileName + "_"
+		if len(avdName) > len(prefix) && avdName[:len(prefix)] == prefix {
+			return profileName
+		}
+	}
+	// Fallback: return first profile (for user-created AVDs like Pixel_8_API_34-ext8)
+	for profileName := range cfg.Pool.Profiles.Android {
+		return profileName
+	}
+	return ""
 }

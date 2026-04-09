@@ -15,7 +15,22 @@
       "Bash(chmod +x /Users/humblefool2909/drizz-farm/scripts/install.sh)",
       "Bash(./bin/drizz-farm session:*)",
       "Bash(git reset:*)",
-      "Bash(git rm:*)"
+      "Bash(git rm:*)",
+      "Bash(rm ~/.drizz-farm/config.yaml)",
+      "Bash(./bin/drizz-farm setup:*)",
+      "Bash(curl -s http://localhost:9401/api/v1/pool)",
+      "Bash(python3 -m json.tool)",
+      "Bash(curl -s -X POST http://localhost:9401/api/v1/sessions -H 'Content-Type: application/json' -d '{\"profile\": \"api34_ext8_play\"}')",
+      "Bash(kill 64873)",
+      "Bash(kill 64907)",
+      "Bash(pkill -f \"drizz-farm start\")",
+      "Bash(pkill -f \"qemu-system\")",
+      "Bash(pkill -f \"drizz-farm\")",
+      "Bash(rm -f ~/.drizz-farm/config.yaml)",
+      "Bash(./bin/drizz-farm create:*)",
+      "Bash(./bin/drizz-farm status:*)",
+      "Bash(curl -s http://127.0.0.1:9401/api/v1/pool)",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); [print\\(f'{i[\\\\\"id\\\\\"]} {i[\\\\\"avd_name\\\\\"]} state={i[\\\\\"state\\\\\"]} health_fails={i[\\\\\"health_fails\\\\\"]}'\\) for i in d['instances']]\")"
     ]
   }
 }

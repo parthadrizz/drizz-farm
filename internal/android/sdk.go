@@ -1,10 +1,12 @@
 package android
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
 
 // SDK provides access to Android SDK tool paths.
@@ -99,6 +101,64 @@ func (s *SDK) SystemImageInstalled(image string) bool {
 // HostGPUSupported returns true if the host supports GPU acceleration.
 func (s *SDK) HostGPUSupported() bool {
 	return runtime.GOOS == "darwin" // Apple Silicon always supports Metal/host GPU
+}
+
+// InstalledSystemImage represents an installed system image on the machine.
+type InstalledSystemImage struct {
+	Path    string // e.g., "system-images;android-34-ext8;google_apis_playstore;arm64-v8a"
+	APIName string // e.g., "android-34-ext8"
+	Variant string // e.g., "google_apis_playstore"
+	Arch    string // e.g., "arm64-v8a"
+}
+
+// ListInstalledSystemImages queries sdkmanager for installed system images.
+func (s *SDK) ListInstalledSystemImages(ctx context.Context, runner CommandRunner) ([]InstalledSystemImage, error) {
+	out, err := runner.Run(ctx, s.SDKManagerPath(), "--list_installed")
+	if err != nil {
+		return nil, fmt.Errorf("sdkmanager --list_installed: %w", err)
+	}
+
+	var images []InstalledSystemImage
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		// Lines look like: "  system-images;android-34-ext8;google_apis_playstore;arm64-v8a | 2 | ..."
+		if !strings.HasPrefix(line, "system-images;") {
+			continue
+		}
+		// Extract the package path (first column before |)
+		parts := strings.SplitN(line, "|", 2)
+		pkgPath := strings.TrimSpace(parts[0])
+
+		segments := splitSemicolon(pkgPath)
+		if len(segments) != 4 {
+			continue
+		}
+		images = append(images, InstalledSystemImage{
+			Path:    pkgPath,
+			APIName: segments[1],
+			Variant: segments[2],
+			Arch:    segments[3],
+		})
+	}
+
+	return images, nil
+}
+
+// ListInstalledDevices queries avdmanager for available device definitions.
+func (s *SDK) ListInstalledDevices(ctx context.Context, runner CommandRunner) ([]string, error) {
+	out, err := runner.Run(ctx, s.AVDManagerPath(), "list", "device", "-c")
+	if err != nil {
+		return nil, fmt.Errorf("avdmanager list device: %w", err)
+	}
+
+	var devices []string
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			devices = append(devices, line)
+		}
+	}
+	return devices, nil
 }
 
 func splitSemicolon(s string) []string {

@@ -61,3 +61,19 @@ func (s EmulatorState) CanTransitionTo(target EmulatorState) bool {
 func (s EmulatorState) MarshalJSON() ([]byte, error) {
 	return []byte(`"` + s.String() + `"`), nil
 }
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (s *EmulatorState) UnmarshalJSON(data []byte) error {
+	str := string(data)
+	// Strip quotes
+	if len(str) >= 2 && str[0] == '"' {
+		str = str[1 : len(str)-1]
+	}
+	for state, name := range stateNames {
+		if name == str {
+			*s = state
+			return nil
+		}
+	}
+	return fmt.Errorf("unknown emulator state: %s", str)
+}

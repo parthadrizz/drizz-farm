@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -23,14 +24,25 @@ import (
 	"github.com/drizz-dev/drizz-farm/internal/session"
 )
 
+var (
+	visibleEmulators bool
+	startOnly        []string
+)
+
 var startCmd = &cobra.Command{
-	Use:   "start",
+	Use:   "start [avd-names...]",
 	Short: "Start the drizz-farm daemon",
-	Long:  "Starts the emulator pool manager daemon, warming up emulators and serving the REST API.",
-	RunE:  runStart,
+	Long: `Starts the emulator pool manager daemon and boots emulators.
+
+By default boots all warmup AVDs from config. Pass AVD names to boot specific ones:
+  drizz-farm start                                    # boot all warmup AVDs
+  drizz-farm start drizz_api34_ext8_play_0            # boot only this one
+  drizz-farm start Pixel_8_API_34-ext8 drizz_api34_ext8_play_0  # boot these two`,
+	RunE: runStart,
 }
 
 func init() {
+	startCmd.Flags().BoolVar(&visibleEmulators, "visible", false, "show emulator windows (for development/debugging)")
 	rootCmd.AddCommand(startCmd)
 }
 
@@ -40,6 +52,11 @@ func runStart(cmd *cobra.Command, args []string) error {
 	// Load config
 	cfg, err := config.Load()
 	if err != nil {
+		home, _ := os.UserHomeDir()
+		configPath := filepath.Join(home, ".drizz-farm", "config.yaml")
+		if _, statErr := os.Stat(configPath); os.IsNotExist(statErr) {
+			return fmt.Errorf("no config found at %s\n\nRun these commands first:\n  drizz-farm setup    # check prerequisites\n  drizz-farm create   # create the farm", configPath)
+		}
 		return fmt.Errorf("load config: %w", err)
 	}
 
@@ -83,10 +100,22 @@ func runStart(cmd *cobra.Command, args []string) error {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
+	// Apply CLI overrides
+	if visibleEmulators {
+		cfg.Pool.VisibleEmulators = true
+		log.Info().Msg("emulator windows will be visible (--visible flag)")
+	}
+
 	// Initialize pool
 	runner := &android.DefaultRunner{}
 	emulatorPool := pool.New(cfg, sdk, runner)
-	if err := emulatorPool.Start(ctx); err != nil {
+	// Determine which AVDs to boot
+	var startOpts *pool.StartOptions
+	if len(args) > 0 {
+		startOpts = &pool.StartOptions{AVDNames: args}
+	}
+
+	if err := emulatorPool.Start(ctx, startOpts); err != nil {
 		return fmt.Errorf("pool start: %w", err)
 	}
 
@@ -115,14 +144,14 @@ func runStart(cmd *cobra.Command, args []string) error {
 	// mDNS announcement
 	var announcer *discovery.Announcer
 	if cfg.Network.MDNS.Enabled {
-		poolStatus := emulatorPool.Status()
+		mdnsPoolStatus := emulatorPool.Status()
 		announcer, err = discovery.NewAnnouncer(ctx, discovery.AnnounceConfig{
 			NodeName:      cfg.Node.Name,
 			Port:          cfg.API.Port,
 			Version:       buildinfo.Version,
 			Tier:          string(lic.Current().Tier),
-			AndroidAvail:  poolStatus.Warm,
-			TotalCapacity: poolStatus.TotalCapacity,
+			AndroidAvail:  mdnsPoolStatus.Warm,
+			TotalCapacity: mdnsPoolStatus.TotalCapacity,
 		})
 		if err != nil {
 			log.Warn().Err(err).Msg("mDNS announcement failed (continuing)")
@@ -138,15 +167,19 @@ func runStart(cmd *cobra.Command, args []string) error {
 		errCh <- server.Start()
 	}()
 
+	poolStatus := emulatorPool.Status()
 	log.Info().
 		Str("node", cfg.Node.Name).
 		Int("api_port", cfg.API.Port).
 		Str("tier", string(lic.Current().Tier)).
+		Int("warm", poolStatus.Warm).
+		Int("capacity", poolStatus.TotalCapacity).
 		Msg("drizz-farm is LIVE")
 
 	fmt.Printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 	fmt.Printf("  drizz-farm is LIVE on %s:%d\n", cfg.API.Host, cfg.API.Port)
 	fmt.Printf("  Node: %s | Tier: %s\n", cfg.Node.Name, lic.Current().Tier)
+	fmt.Printf("  Pool: %d warm / %d capacity\n", poolStatus.Warm, poolStatus.TotalCapacity)
 	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
 
 	// Wait for signal or error

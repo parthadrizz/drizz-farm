@@ -1,23 +1,57 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
-	"text/tabwriter"
+	"runtime"
+	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/drizz-dev/drizz-farm/internal/android"
 	"github.com/drizz-dev/drizz-farm/internal/daemon"
 	"github.com/drizz-dev/drizz-farm/internal/pool"
 )
 
+func toDisplayState(s pool.EmulatorState) string {
+	switch s {
+	case pool.StateBooting, pool.StateCreating:
+		return "BOOTING"
+	case pool.StateWarm, pool.StateAllocated:
+		return "ONLINE"
+	case pool.StateResetting, pool.StateDestroying:
+		return "SHUTTING DOWN"
+	case pool.StateError:
+		return "ERROR"
+	default:
+		return "OFFLINE"
+	}
+}
+
+func stateIcon(displayState string) string {
+	switch displayState {
+	case "ONLINE":
+		return "●"
+	case "BOOTING":
+		return "◐"
+	case "SHUTTING DOWN":
+		return "↻"
+	case "ERROR":
+		return "✗"
+	default:
+		return "○"
+	}
+}
+
 var statusCmd = &cobra.Command{
 	Use:   "status",
-	Short: "Show drizz-farm pool status",
+	Short: "Show drizz-farm status — daemon, pool, AVDs, hardware",
 	RunE:  runStatus,
 }
 
@@ -27,52 +61,163 @@ func init() {
 
 func runStatus(cmd *cobra.Command, args []string) error {
 	home, _ := os.UserHomeDir()
-	pidFile := daemon.NewPIDFile(filepath.Join(home, ".drizz-farm"))
+	dataDir := filepath.Join(home, ".drizz-farm")
+	configPath := filepath.Join(dataDir, "config.yaml")
 
-	if !pidFile.IsRunning() {
-		fmt.Println("drizz-farm is not running.")
-		return nil
+	fmt.Println("drizz-farm Status")
+	fmt.Println("━━━━━━━━━━━━━━━━━")
+	fmt.Println()
+
+	// 1. Daemon status
+	pidFile := daemon.NewPIDFile(dataDir)
+	daemonRunning := pidFile.IsRunning()
+	pid, _ := pidFile.Read()
+
+	if daemonRunning {
+		fmt.Printf("  Daemon:    RUNNING (PID %d)\n", pid)
+	} else {
+		fmt.Printf("  Daemon:    STOPPED\n")
 	}
 
-	// Call local API
-	resp, err := http.Get("http://localhost:9401/api/v1/pool")
-	if err != nil {
-		return fmt.Errorf("connect to daemon: %w (is drizz-farm running?)", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("read response: %w", err)
+	// 2. Config
+	if _, err := os.Stat(configPath); err == nil {
+		fmt.Printf("  Config:    %s\n", configPath)
+	} else {
+		fmt.Printf("  Config:    not found (run 'drizz-farm create')\n")
 	}
 
-	if jsonOut {
-		fmt.Println(string(body))
-		return nil
+	// 3. SDK
+	sdk, sdkErr := android.DetectSDK()
+	if sdkErr != nil {
+		fmt.Printf("  SDK:       not found\n")
+	} else {
+		fmt.Printf("  SDK:       %s\n", sdk.Root)
 	}
 
-	var status pool.PoolStatus
-	if err := json.Unmarshal(body, &status); err != nil {
-		return fmt.Errorf("parse response: %w", err)
-	}
-
-	fmt.Printf("Pool Status (capacity: %d)\n", status.TotalCapacity)
-	fmt.Printf("  Warm: %d | Allocated: %d | Booting: %d | Error: %d\n\n",
-		status.Warm, status.Allocated, status.Booting, status.Error)
-
-	if len(status.Instances) > 0 {
-		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "ID\tPROFILE\tSTATE\tSERIAL\tADB PORT\tSESSION")
-		for _, inst := range status.Instances {
-			sessionID := "-"
-			if inst.SessionID != "" {
-				sessionID = inst.SessionID
+	// 4. AVDs on disk — all are available to drizz-farm
+	fmt.Println()
+	fmt.Println("  AVDs (all available to pool):")
+	if sdkErr == nil {
+		runner := &android.DefaultRunner{}
+		avdMgr := android.NewAVDManager(sdk, runner)
+		avds, err := avdMgr.List(context.Background())
+		if err == nil && len(avds) > 0 {
+			for _, avd := range avds {
+				fmt.Printf("    ● %s\n", avd.Name)
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d\t%s\n",
-				inst.ID, inst.ProfileName, inst.State, inst.Serial, inst.ADBPort, sessionID)
+			fmt.Printf("    %d available\n", len(avds))
+		} else {
+			fmt.Printf("    none (run 'drizz-farm create')\n")
 		}
-		w.Flush()
 	}
 
+	// 5. Emulators — show ALL AVDs with their real status
+	fmt.Println()
+	fmt.Println("  Emulators:")
+	if sdkErr == nil {
+		runner := &android.DefaultRunner{}
+		avdMgr := android.NewAVDManager(sdk, runner)
+		avds, err := avdMgr.List(context.Background())
+
+		// Get pool state if daemon is running
+		poolByAVD := make(map[string]pool.InstanceSnapshot)
+		if daemonRunning {
+			resp, apiErr := http.Get("http://127.0.0.1:9401/api/v1/pool")
+			if apiErr == nil {
+				defer resp.Body.Close()
+				body, _ := io.ReadAll(resp.Body)
+				var status pool.PoolStatus
+				if json.Unmarshal(body, &status) == nil {
+					for _, inst := range status.Instances {
+						poolByAVD[inst.AVDName] = inst
+					}
+				}
+			}
+		}
+
+		if err == nil && len(avds) > 0 {
+			for _, avd := range avds {
+				inst, inPool := poolByAVD[avd.Name]
+				if !inPool {
+					fmt.Printf("    ○ %-35s OFFLINE\n", avd.Name)
+					continue
+				}
+
+				displayState := toDisplayState(inst.State)
+				icon := stateIcon(displayState)
+				line := fmt.Sprintf("    %s %-35s %s", icon, avd.Name, displayState)
+
+				if displayState == "ONLINE" {
+					line += fmt.Sprintf("  %s  port:%d", inst.Serial, inst.ADBPort)
+					if inst.SessionID != "" {
+						line += fmt.Sprintf("  session:%s", inst.SessionID)
+					}
+				}
+				fmt.Println(line)
+			}
+		} else {
+			fmt.Println("    no AVDs found (run 'drizz-farm create')")
+		}
+	}
+
+	// 6. Hardware
+	fmt.Println()
+	fmt.Println("  Hardware:")
+	fmt.Printf("    Platform:  %s/%s\n", runtime.GOOS, runtime.GOARCH)
+	fmt.Printf("    CPUs:      %d\n", runtime.NumCPU())
+	if runtime.GOOS == "darwin" {
+		out, err := exec.Command("sysctl", "-n", "hw.memsize").CombinedOutput()
+		if err == nil {
+			var memBytes int64
+			fmt.Sscanf(strings.TrimSpace(string(out)), "%d", &memBytes)
+			fmt.Printf("    RAM:       %d GB\n", memBytes/(1024*1024*1024))
+		}
+	}
+
+	// 7. If daemon is running, show pool summary + sessions
+	if daemonRunning {
+		// Pool summary
+		resp, err := http.Get("http://127.0.0.1:9401/api/v1/pool")
+		if err == nil {
+			defer resp.Body.Close()
+			body, _ := io.ReadAll(resp.Body)
+			var status pool.PoolStatus
+			if json.Unmarshal(body, &status) == nil {
+				fmt.Println()
+				fmt.Printf("  Pool:  %d warm, %d allocated, %d booting, %d error (capacity: %d)\n",
+					status.Warm, status.Allocated, status.Booting, status.Error, status.TotalCapacity)
+			}
+		}
+
+		// Sessions
+		resp2, err := http.Get("http://127.0.0.1:9401/api/v1/sessions")
+		if err == nil {
+			defer resp2.Body.Close()
+			body2, _ := io.ReadAll(resp2.Body)
+			var result struct {
+				Active int `json:"active"`
+				Queued int `json:"queued"`
+			}
+			if json.Unmarshal(body2, &result) == nil {
+				fmt.Printf("  Sessions:  %d active, %d queued\n", result.Active, result.Queued)
+			}
+		}
+
+		// Uptime
+		resp3, err := http.Get("http://127.0.0.1:9401/api/v1/node/health")
+		if err == nil {
+			defer resp3.Body.Close()
+			body3, _ := io.ReadAll(resp3.Body)
+			var health struct {
+				Uptime  string `json:"uptime"`
+				Version string `json:"version"`
+			}
+			if json.Unmarshal(body3, &health) == nil {
+				fmt.Printf("  Uptime:  %s\n", health.Uptime)
+			}
+		}
+	}
+
+	fmt.Println()
 	return nil
 }

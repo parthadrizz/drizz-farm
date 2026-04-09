@@ -28,6 +28,7 @@ type NodeConfig struct {
 }
 
 type PoolConfig struct {
+	VisibleEmulators      bool            `yaml:"visible_emulators"        mapstructure:"visible_emulators"`
 	MaxConcurrent         int             `yaml:"max_concurrent"           mapstructure:"max_concurrent"`
 	SessionTimeoutMinutes int             `yaml:"session_timeout_minutes"  mapstructure:"session_timeout_minutes"`
 	SessionMaxMinutes     int             `yaml:"session_max_duration_minutes" mapstructure:"session_max_duration_minutes"`
