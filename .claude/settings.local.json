@@ -89,7 +89,8 @@
       "Bash(grep -c \"--- PASS\")",
       "Bash(mkdir -p /Users/humblefool2909/drizz-farm/mcp)",
       "Bash(npm init:*)",
-      "Bash(git commit -m 'fix: remove mcp/node_modules and dist from git, add to gitignore:*)"
+      "Bash(git commit -m 'fix: remove mcp/node_modules and dist from git, add to gitignore:*)",
+      "Bash(git commit -m 'fix: actually remove mcp/node_modules from tracking:*)"
     ]
   }
 }
