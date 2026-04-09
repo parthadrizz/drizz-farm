@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -536,15 +537,6 @@ func (h *deviceHandlers) GetDeviceInfo(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GetScreenText handles GET /api/v1/sessions/:id/screen-text — all visible text
-func (h *deviceHandlers) GetScreenText(w http.ResponseWriter, r *http.Request) {
-	serial := h.findSerial(chi.URLParam(r, "id"))
-	if serial == "" { JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404}); return }
-	// Dump UI and extract text attributes
-	output, _ := h.adb.Shell(r.Context(), serial, "uiautomator dump /dev/tty 2>/dev/null | grep -oP 'text=\"[^\"]*\"' | sed 's/text=\"//;s/\"//' | grep -v '^$'")
-	JSON(w, 200, map[string]any{"text": output})
-}
-
 // GetNotifications handles GET /api/v1/sessions/:id/notifications
 func (h *deviceHandlers) GetNotifications(w http.ResponseWriter, r *http.Request) {
 	serial := h.findSerial(chi.URLParam(r, "id"))
@@ -566,10 +558,7 @@ func (h *deviceHandlers) IsKeyboardShown(w http.ResponseWriter, r *http.Request)
 	serial := h.findSerial(chi.URLParam(r, "id"))
 	if serial == "" { JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404}); return }
 	output, _ := h.adb.Shell(r.Context(), serial, "dumpsys input_method | grep mInputShown")
-	shown := false
-	if output != "" && (len(output) > 0) {
-		shown = contains(output, "mInputShown=true")
-	}
+	shown := strings.Contains(output, "mInputShown=true")
 	JSON(w, 200, map[string]any{"shown": shown})
 }
 
@@ -583,59 +572,6 @@ func (h *deviceHandlers) PressKey(w http.ResponseWriter, r *http.Request) {
 	JSON(w, 200, map[string]any{"status": "pressed", "keycode": req.Keycode})
 }
 
-// LongPress handles POST /api/v1/sessions/:id/long-press
-func (h *deviceHandlers) LongPress(w http.ResponseWriter, r *http.Request) {
-	serial := h.findSerial(chi.URLParam(r, "id"))
-	if serial == "" { JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404}); return }
-	var req struct { X int `json:"x"`; Y int `json:"y"`; DurationMS int `json:"duration_ms"` }
-	json.NewDecoder(r.Body).Decode(&req)
-	if req.DurationMS == 0 { req.DurationMS = 1000 }
-	h.adb.Shell(r.Context(), serial, fmt.Sprintf("input swipe %d %d %d %d %d", req.X, req.Y, req.X, req.Y, req.DurationMS))
-	JSON(w, 200, map[string]any{"status": "pressed", "x": req.X, "y": req.Y})
-}
-
-// ScrollToText handles POST /api/v1/sessions/:id/scroll-to
-func (h *deviceHandlers) ScrollToText(w http.ResponseWriter, r *http.Request) {
-	serial := h.findSerial(chi.URLParam(r, "id"))
-	if serial == "" { JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404}); return }
-	var req struct { Text string `json:"text"`; MaxScrolls int `json:"max_scrolls"` }
-	json.NewDecoder(r.Body).Decode(&req)
-	if req.MaxScrolls == 0 { req.MaxScrolls = 10 }
-
-	for i := 0; i < req.MaxScrolls; i++ {
-		// Check if text is visible
-		output, _ := h.adb.Shell(r.Context(), serial, "uiautomator dump /dev/tty 2>/dev/null")
-		if contains(output, req.Text) {
-			JSON(w, 200, map[string]any{"status": "found", "scrolls": i})
-			return
-		}
-		// Scroll down
-		h.adb.Shell(r.Context(), serial, "input swipe 540 1500 540 500 300")
-		time.Sleep(500 * time.Millisecond)
-	}
-	JSON(w, 200, map[string]any{"status": "not_found", "scrolls": req.MaxScrolls})
-}
-
-// WaitForElement handles POST /api/v1/sessions/:id/wait-for
-func (h *deviceHandlers) WaitForElement(w http.ResponseWriter, r *http.Request) {
-	serial := h.findSerial(chi.URLParam(r, "id"))
-	if serial == "" { JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404}); return }
-	var req struct { Text string `json:"text"`; TimeoutSeconds int `json:"timeout_seconds"` }
-	json.NewDecoder(r.Body).Decode(&req)
-	if req.TimeoutSeconds == 0 { req.TimeoutSeconds = 10 }
-
-	deadline := time.Now().Add(time.Duration(req.TimeoutSeconds) * time.Second)
-	for time.Now().Before(deadline) {
-		output, _ := h.adb.Shell(r.Context(), serial, "uiautomator dump /dev/tty 2>/dev/null")
-		if contains(output, req.Text) {
-			JSON(w, 200, map[string]any{"status": "found", "waited": time.Since(deadline.Add(-time.Duration(req.TimeoutSeconds)*time.Second)).String()})
-			return
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-	JSON(w, 200, map[string]any{"status": "timeout", "text": req.Text})
-}
-
 // GetPackageInfo handles GET /api/v1/sessions/:id/package-info?package=com.app
 func (h *deviceHandlers) GetPackageInfo(w http.ResponseWriter, r *http.Request) {
 	serial := h.findSerial(chi.URLParam(r, "id"))
@@ -644,18 +580,6 @@ func (h *deviceHandlers) GetPackageInfo(w http.ResponseWriter, r *http.Request) 
 	if pkg == "" { JSON(w, 400, ErrorResponse{Error: "invalid_request", Message: "package param required", Code: 400}); return }
 	output, _ := h.adb.Shell(r.Context(), serial, fmt.Sprintf("dumpsys package %s | head -20", pkg))
 	JSON(w, 200, map[string]any{"package": pkg, "info": output})
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
-		(len(s) > 0 && len(substr) > 0 && findSubstring(s, substr)))
-}
-
-func findSubstring(s, sub string) bool {
-	for i := 0; i <= len(s)-len(sub); i++ {
-		if s[i:i+len(sub)] == sub { return true }
-	}
-	return false
 }
 
 // ExecADB handles POST /api/v1/sessions/:id/adb — raw ADB command

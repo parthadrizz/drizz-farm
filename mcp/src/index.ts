@@ -53,36 +53,14 @@ server.tool(
 
 // --- Tool 2: device_interact ---
 server.tool(
-  "device_interact",
-  "Interact with the emulator screen. Tap elements, type text, swipe, press keys, long press, or scroll to find text.",
+  "device_shell",
+  "Run ADB shell commands on the emulator. Use for any device interaction — tap, type, swipe, install apps, or any ADB command. The farm gives you full ADB access.",
   {
     session_id: z.string().describe("Session or instance ID"),
-    action: z.enum(["tap", "type", "swipe", "press_key", "long_press", "scroll_to", "wait_for"]).describe("Interaction type"),
-    target: z.string().optional().describe("Element text, resource-id, or 'x,y' coordinates (for tap)"),
-    text: z.string().optional().describe("Text to type (for type action)"),
-    direction: z.enum(["up", "down", "left", "right"]).optional().describe("Swipe direction"),
-    keycode: z.string().optional().describe("Android keycode: ENTER, BACK, HOME, TAB, DELETE, etc."),
-    x: z.number().optional().describe("X coordinate"),
-    y: z.number().optional().describe("Y coordinate"),
-    timeout: z.number().optional().describe("Timeout in seconds (for wait_for)"),
+    command: z.string().describe("ADB shell command to execute. Examples: 'input tap 500 800', 'input text hello', 'input swipe 500 1500 500 500 300', 'pm list packages', 'dumpsys battery'"),
   },
-  async ({ session_id, action, target, text, direction, keycode, x, y, timeout }) => {
-    switch (action) {
-      case "tap":
-        return result(await farm.tap(session_id, target || `${x},${y}`));
-      case "type":
-        return result(await farm.typeText(session_id, text || ''));
-      case "swipe":
-        return result(await farm.swipe(session_id, direction || 'up'));
-      case "press_key":
-        return result(await farm.pressKey(session_id, keycode || 'ENTER'));
-      case "long_press":
-        return result(await farm.longPress(session_id, x || 0, y || 0));
-      case "scroll_to":
-        return result(await farm.scrollToText(session_id, target || text || ''));
-      case "wait_for":
-        return result(await farm.waitForElement(session_id, target || text || '', timeout || 10));
-    }
+  async ({ session_id, command }) => {
+    return result(await farm.execADB(session_id, command));
   }
 );
 
