@@ -4,9 +4,9 @@ DATE    ?= $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
 BINARY  := drizz-farm
 
 LDFLAGS := -s -w \
-	-X github.com/drizz-dev/drizz-farm/cmd.Version=$(VERSION) \
-	-X github.com/drizz-dev/drizz-farm/cmd.Commit=$(COMMIT) \
-	-X github.com/drizz-dev/drizz-farm/cmd.BuildDate=$(DATE)
+	-X github.com/drizz-dev/drizz-farm/internal/buildinfo.Version=$(VERSION) \
+	-X github.com/drizz-dev/drizz-farm/internal/buildinfo.Commit=$(COMMIT) \
+	-X github.com/drizz-dev/drizz-farm/internal/buildinfo.BuildDate=$(DATE)
 
 .PHONY: build test lint run clean fmt vet
 
