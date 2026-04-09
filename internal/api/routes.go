@@ -20,6 +20,10 @@ func RegisterRoutes(r chi.Router, cfg *config.Config, p *pool.Pool, b *session.B
 		license:   lic,
 		startedAt: deps.StartedAt,
 	}
+	discH := &discoveryHandlers{
+		sdk:    deps.SDK,
+		runner: deps.Runner,
+	}
 
 	r.Route("/api/v1", func(r chi.Router) {
 		// Sessions
@@ -34,5 +38,13 @@ func RegisterRoutes(r chi.Router, cfg *config.Config, p *pool.Pool, b *session.B
 
 		// Node
 		r.Get("/node/health", nodeH.Health)
+
+		// Discovery (for Create Wizard)
+		r.Route("/discovery", func(r chi.Router) {
+			r.Get("/system-images", discH.SystemImages)
+			r.Get("/devices", discH.Devices)
+			r.Get("/avds", discH.AVDs)
+			r.Post("/create-avds", discH.CreateAVDs)
+		})
 	})
 }

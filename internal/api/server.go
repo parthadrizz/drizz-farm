@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
 
+	"github.com/drizz-dev/drizz-farm/internal/android"
 	"github.com/drizz-dev/drizz-farm/internal/config"
 	"github.com/drizz-dev/drizz-farm/internal/license"
 	"github.com/drizz-dev/drizz-farm/internal/pool"
@@ -18,6 +19,8 @@ import (
 // ServerDeps holds shared dependencies for the API server.
 type ServerDeps struct {
 	StartedAt time.Time
+	SDK       *android.SDK
+	Runner    android.CommandRunner
 }
 
 // Server is the HTTP API server.

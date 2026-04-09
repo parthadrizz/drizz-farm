@@ -12,7 +12,7 @@ LDFLAGS := -s -w \
 
 ## build: Compile the binary
 build:
-	go build -ldflags "$(LDFLAGS)" -o bin/$(BINARY) .
+	go build -ldflags "$(LDFLAGS)" -o bin/$(BINARY) github.com/drizz-dev/drizz-farm
 
 ## run: Build and run the daemon
 run: build

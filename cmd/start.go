@@ -149,7 +149,11 @@ func runStart(cmd *cobra.Command, args []string) error {
 	}
 
 	// API server
-	server := api.NewServer(cfg, emulatorPool, broker, lic, api.ServerDeps{StartedAt: startedAt})
+	server := api.NewServer(cfg, emulatorPool, broker, lic, api.ServerDeps{
+		StartedAt: startedAt,
+		SDK:       sdk,
+		Runner:    runner,
+	})
 
 	errCh := make(chan error, 1)
 	go func() {

@@ -35,7 +35,18 @@
       "Bash(curl -s -X POST http://127.0.0.1:9401/api/v1/sessions -H 'Content-Type: application/json' -d '{\"profile\": \"api34_ext8_play\"}')",
       "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(f'Session: {d[\\\\\"id\\\\\"]}  Emulator: {d[\\\\\"connection\\\\\"][\\\\\"adb_serial\\\\\"]}'\\)\")",
       "Bash(curl -s http://127.0.0.1:9401/api/v1/sessions/8e13bbed-460)",
-      "Bash(/opt/homebrew/bin/go vet:*)"
+      "Bash(/opt/homebrew/bin/go vet:*)",
+      "Bash(npm --version)",
+      "Bash(npm create:*)",
+      "Bash(npm install:*)",
+      "Bash(npx tsc:*)",
+      "Bash(curl -s http://127.0.0.1:9401/api/v1/discovery/devices)",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(f'{len\\(d[\\\\\"devices\\\\\"]\\)} devices'\\); [print\\(f'  {x}'\\) for x in d['devices'][:5]]\")",
+      "Bash(curl -s http://127.0.0.1:9401/api/v1/discovery/avds)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(npx tailwindcss:*)",
+      "Bash(python3 -c \"import json,sys; print\\(json.load\\(sys.stdin\\)['version']\\)\")",
+      "Bash(npm uninstall:*)"
     ]
   }
 }

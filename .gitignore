@@ -1,5 +1,7 @@
 bin/
 .idea/
+web/node_modules/
+web/dist/
 dist/
 *.exe
 *.dll
