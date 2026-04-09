@@ -46,7 +46,8 @@
       "mcp__Claude_Preview__preview_start",
       "Bash(npx tailwindcss:*)",
       "Bash(python3 -c \"import json,sys; print\\(json.load\\(sys.stdin\\)['version']\\)\")",
-      "Bash(npm uninstall:*)"
+      "Bash(npm uninstall:*)",
+      "Bash(curl -s http://127.0.0.1:9401/api/v1/discovery/system-images)"
     ]
   }
 }

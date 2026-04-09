@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom';
 import { Dashboard } from './pages/Dashboard';
 import { CreateWizard } from './pages/CreateWizard';
 import { Sessions } from './pages/Sessions';
+import { Settings } from './pages/Settings';
 
 function App() {
   return (
@@ -18,6 +19,7 @@ function App() {
                 { to: '/', label: 'Dashboard', end: true },
                 { to: '/create', label: 'Create' },
                 { to: '/sessions', label: 'Sessions' },
+                { to: '/settings', label: 'Settings' },
               ].map(({ to, label, end }) => (
                 <NavLink key={to} to={to} end={end} className={({ isActive }) =>
                   `px-3 py-1.5 rounded-md text-sm font-medium transition ${isActive ? 'bg-gray-800 text-white' : 'text-gray-400 hover:text-gray-200'}`
@@ -31,6 +33,7 @@ function App() {
             <Route path="/" element={<Dashboard />} />
             <Route path="/create" element={<CreateWizard />} />
             <Route path="/sessions" element={<Sessions />} />
+            <Route path="/settings" element={<Settings />} />
           </Routes>
         </main>
       </div>

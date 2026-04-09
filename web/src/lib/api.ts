@@ -72,13 +72,36 @@ async function fetchJSON<T>(url: string, opts?: RequestInit): Promise<T> {
   return resp.json();
 }
 
+async function fetchText(url: string): Promise<string> {
+  const resp = await fetch(BASE + url);
+  if (!resp.ok) throw new Error(`API error ${resp.status}`);
+  return resp.text();
+}
+
 export const api = {
+  // Pool
   pool: () => fetchJSON<PoolStatus>('/pool'),
-  health: () => fetchJSON<NodeHealth>('/node/health'),
+  available: (profile?: string) => fetchJSON<{ available: number }>(`/pool/available${profile ? `?profile=${profile}` : ''}`),
+  bootAVD: (avdName: string) => fetchJSON<any>('/pool/boot', { method: 'POST', body: JSON.stringify({ avd_name: avdName }) }),
+  shutdownInstance: (instanceId: string) => fetchJSON<any>('/pool/shutdown', { method: 'POST', body: JSON.stringify({ instance_id: instanceId }) }),
+
+  // Sessions
   createSession: (profile: string) =>
     fetchJSON<Session>('/sessions', { method: 'POST', body: JSON.stringify({ profile, source: 'dashboard' }) }),
   listSessions: () => fetchJSON<{ sessions: Session[]; active: number; queued: number }>('/sessions'),
+  getSession: (id: string) => fetchJSON<Session>(`/sessions/${id}`),
   releaseSession: (id: string) => fetchJSON<{ status: string }>(`/sessions/${id}`, { method: 'DELETE' }),
+
+  // Node
+  health: () => fetchJSON<NodeHealth>('/node/health'),
+
+  // Config
+  getConfig: () => fetchJSON<any>('/config'),
+  getConfigRaw: () => fetchText('/config/raw'),
+  saveConfigRaw: (yaml: string) =>
+    fetch(BASE + '/config/raw', { method: 'PUT', body: yaml, headers: { 'Content-Type': 'text/yaml' } }).then(r => r.json()),
+
+  // Discovery
   systemImages: () => fetchJSON<{ images: SystemImage[] }>('/discovery/system-images'),
   devices: () => fetchJSON<{ devices: string[] }>('/discovery/devices'),
   avds: () => fetchJSON<{ avds: { name: string }[] }>('/discovery/avds'),

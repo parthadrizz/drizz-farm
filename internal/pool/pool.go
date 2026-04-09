@@ -277,6 +277,44 @@ func (p *Pool) GetInstance(id string) (*DeviceInstance, bool) {
 	return inst, ok
 }
 
+// BootAVD manually boots a specific AVD (called from API/UI).
+func (p *Pool) BootAVD(ctx context.Context, avdName string) (*DeviceInstance, error) {
+	// Check if already in pool
+	p.mu.RLock()
+	for _, inst := range p.instances {
+		if inst.Device != nil && inst.Device.DisplayName() == avdName {
+			p.mu.RUnlock()
+			return inst, nil // Already booted
+		}
+	}
+	p.mu.RUnlock()
+
+	if p.totalInstances() >= p.cfg.Pool.MaxConcurrent {
+		return nil, ErrPoolExhausted
+	}
+
+	profileName := guessProfileForAVD(avdName, p.cfg)
+	return p.bootEmulator(ctx, avdName, profileName)
+}
+
+// ShutdownInstance manually shuts down a specific instance (called from API/UI).
+func (p *Pool) ShutdownInstance(ctx context.Context, instanceID string) error {
+	p.mu.RLock()
+	inst, ok := p.instances[instanceID]
+	p.mu.RUnlock()
+
+	if !ok {
+		return fmt.Errorf("%w: %s", ErrInstanceNotFound, instanceID)
+	}
+
+	if inst.GetState() == StateAllocated {
+		return fmt.Errorf("cannot shutdown allocated instance %s (release session first)", instanceID)
+	}
+
+	log.Info().Str("instance", instanceID).Msg("pool: manual shutdown requested")
+	return p.destroyInstance(ctx, inst)
+}
+
 // --- Emulator Boot ---
 
 // bootEmulator boots an existing AVD as an EmulatorDevice.

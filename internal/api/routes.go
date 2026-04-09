@@ -24,6 +24,7 @@ func RegisterRoutes(r chi.Router, cfg *config.Config, p *pool.Pool, b *session.B
 		sdk:    deps.SDK,
 		runner: deps.Runner,
 	}
+	cfgH := &configHandlers{cfg: cfg}
 
 	r.Route("/api/v1", func(r chi.Router) {
 		// Sessions
@@ -35,9 +36,17 @@ func RegisterRoutes(r chi.Router, cfg *config.Config, p *pool.Pool, b *session.B
 		// Pool
 		r.Get("/pool", poolH.Status)
 		r.Get("/pool/available", poolH.Available)
+		r.Post("/pool/boot", poolH.Boot)
+		r.Post("/pool/shutdown", poolH.Shutdown)
 
 		// Node
 		r.Get("/node/health", nodeH.Health)
+
+		// Config
+		r.Get("/config", cfgH.GetConfig)
+		r.Put("/config", cfgH.UpdateConfig)
+		r.Get("/config/raw", cfgH.GetConfigRaw)
+		r.Put("/config/raw", cfgH.SaveConfigRaw)
 
 		// Discovery (for Create Wizard)
 		r.Route("/discovery", func(r chi.Router) {
