@@ -137,7 +137,6 @@ func (p *Pool) Stop(ctx context.Context) error {
 // If none warm, boots an emulator on-demand or picks a discovered USB device.
 func (p *Pool) Allocate(ctx context.Context, profileName string) (*DeviceInstance, error) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 
 	// 1. Find a warm instance (prefer profile match, fall back to any)
 	var anyWarm *DeviceInstance
@@ -149,6 +148,7 @@ func (p *Pool) Allocate(ctx context.Context, profileName string) (*DeviceInstanc
 			if err := inst.TransitionTo(StateAllocated); err != nil {
 				continue
 			}
+			p.mu.Unlock()
 			log.Info().Str("instance", inst.ID).Str("device", inst.Device.DisplayName()).Msg("pool: allocated (profile match)")
 			return inst, nil
 		}
@@ -159,24 +159,26 @@ func (p *Pool) Allocate(ctx context.Context, profileName string) (*DeviceInstanc
 
 	if anyWarm != nil {
 		if err := anyWarm.TransitionTo(StateAllocated); err == nil {
+			p.mu.Unlock()
 			log.Info().Str("instance", anyWarm.ID).Str("device", anyWarm.Device.DisplayName()).Msg("pool: allocated (any warm)")
 			return anyWarm, nil
 		}
 	}
 
 	// 2. No warm — boot emulator on-demand if under capacity
-	if len(p.instances) < p.cfg.Pool.MaxConcurrent {
+	underCapacity := len(p.instances) < p.cfg.Pool.MaxConcurrent
+	p.mu.Unlock() // Release lock before external commands
+
+	if underCapacity {
 		avdName, err := p.findUnbootedAVD(ctx)
 		if err != nil || avdName == "" {
 			return nil, ErrPoolExhausted
 		}
 
 		guessedProfile := guessProfileForAVD(avdName, p.cfg)
-
 		log.Info().Str("avd", avdName).Msg("pool: booting on-demand")
-		p.mu.Unlock()
+
 		inst, err := p.bootEmulator(ctx, avdName, guessedProfile)
-		p.mu.Lock()
 		if err != nil {
 			return nil, fmt.Errorf("pool: on-demand boot failed: %w", err)
 		}
@@ -461,9 +463,12 @@ func (p *Pool) removeInstance(id string) {
 
 // --- Device Watching ---
 
-// watchDevice polls a device and removes it from the pool if it dies.
+// watchDevice monitors a device. Waits for grace period before health checking.
 func (p *Pool) watchDevice(inst *DeviceInstance) {
-	ticker := time.NewTicker(3 * time.Second)
+	// Grace period — don't health check during initial boot/snapshot
+	time.Sleep(30 * time.Second)
+
+	ticker := time.NewTicker(time.Duration(p.cfg.HealthCheck.IntervalSeconds) * time.Second)
 	defer ticker.Stop()
 
 	for range ticker.C {
@@ -472,26 +477,26 @@ func (p *Pool) watchDevice(inst *DeviceInstance) {
 			return
 		}
 
-		// Check health
+		// Skip health checks during resetting
+		if state == StateResetting || state == StateBooting {
+			continue
+		}
+
+		p.mu.RLock()
+		_, exists := p.instances[inst.ID]
+		p.mu.RUnlock()
+		if !exists {
+			return
+		}
+
 		if inst.Device != nil {
 			if err := inst.Device.HealthCheck(context.Background()); err != nil {
-				p.mu.RLock()
-				_, exists := p.instances[inst.ID]
-				p.mu.RUnlock()
-				if !exists {
-					return
-				}
-
-				state = inst.GetState()
-				if state == StateDestroying || state == StateResetting {
-					return
-				}
-
 				inst.RecordHealthCheck(false)
 				if inst.HealthFails >= p.cfg.HealthCheck.UnhealthyThreshold {
 					log.Warn().
 						Str("instance", inst.ID).
 						Str("device", inst.Device.DisplayName()).
+						Int("fails", inst.HealthFails).
 						Msg("pool: device unhealthy, removing")
 					_ = p.destroyInstance(context.Background(), inst)
 					return
@@ -613,20 +618,21 @@ func (p *Pool) totalInstances() int {
 	return len(p.instances)
 }
 
+// findUnbootedAVD finds an AVD not currently in the pool.
+// IMPORTANT: caller must NOT hold p.mu — this runs external commands and reads p.instances.
 func (p *Pool) findUnbootedAVD(ctx context.Context) (string, error) {
 	allAVDs, err := p.avdMgr.List(ctx)
 	if err != nil {
 		return "", err
 	}
 
+	// Read instances without lock — caller already released it or we're outside lock
 	booted := make(map[string]bool)
-	p.mu.RLock()
 	for _, inst := range p.instances {
 		if inst.Device != nil {
 			booted[inst.Device.DisplayName()] = true
 		}
 	}
-	p.mu.RUnlock()
 
 	for _, avd := range allAVDs {
 		if !booted[avd.Name] {

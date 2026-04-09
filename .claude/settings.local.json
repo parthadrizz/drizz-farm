@@ -55,7 +55,23 @@
       "Bash(curl -s http://127.0.0.1:9401/create)",
       "Bash(rm -rf ../internal/api/dashboard)",
       "Bash(cp -r dist ../internal/api/dashboard)",
-      "Bash(curl -s http://127.0.0.1:9401/api/v1/config)"
+      "Bash(curl -s http://127.0.0.1:9401/api/v1/config)",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(f'Status: {d[\\\\\"status\\\\\"]}, Uptime: {d[\\\\\"uptime\\\\\"]}'\\)\")",
+      "Bash(curl -s -X POST http://127.0.0.1:9401/api/v1/sessions -H 'Content-Type: application/json' -d '{\"profile\":\"api34_ext8_play\",\"source\":\"test\"}')",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(f'warm={d[\\\\\"warm\\\\\"]} allocated={d[\\\\\"allocated\\\\\"]} booting={d[\\\\\"booting\\\\\"]}'\\); [print\\(f'  {i[\\\\\"device_name\\\\\"]} [{i[\\\\\"state\\\\\"]}]'\\) for i in d['instances']]\")",
+      "Bash(timeout 60 curl -s -X POST http://127.0.0.1:9401/api/v1/sessions -H 'Content-Type: application/json' -d '{\"profile\":\"api34_ext8_play\"}')",
+      "Bash(pkill -9 -f \"drizz-farm\")",
+      "Bash(pkill -9 -f \"qemu-system\")",
+      "Bash(curl -s --max-time 90 -X POST http://127.0.0.1:9401/api/v1/sessions -H 'Content-Type: application/json' -d '{\"profile\":\"api34_ext8_play\"}')",
+      "Bash(python3 -c \"import json,sys; [print\\(a['name']\\) for a in json.load\\(sys.stdin\\)['avds']]\")",
+      "Bash(curl -s -X POST http://127.0.0.1:9401/api/v1/pool/boot -H 'Content-Type: application/json' -d '{\"avd_name\":\"drizz_api34_ext8_play_0\"}')",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(f'Session: {d.get\\(\\\\\"id\\\\\",\\\\\"FAIL\\\\\"\\)} Serial: {d.get\\(\\\\\"connection\\\\\",{}\\).get\\(\\\\\"adb_serial\\\\\",\\\\\"none\\\\\"\\)}'\\)\")",
+      "Bash(curl -s -X POST http://127.0.0.1:9401/api/v1/sessions/c84e3181/snapshot/save -H 'Content-Type: application/json' -d '{\"name\":\"test_snap_1\"}')",
+      "Bash(curl -s http://127.0.0.1:9401/api/v1/sessions/c84e3181/snapshots)",
+      "Bash(curl -s -X POST http://127.0.0.1:9401/api/v1/sessions/c84e3181/snapshot/restore -H 'Content-Type: application/json' -d '{\"name\":\"test_snap_1\"}')",
+      "Bash(curl -s http://127.0.0.1:9401/api/v1/history/sessions)",
+      "Bash(curl -s -X DELETE http://127.0.0.1:9401/api/v1/sessions/4e4a543c-6c3)",
+      "Bash(curl -s \"http://127.0.0.1:9401/api/v1/history/sessions\")"
     ]
   }
 }
