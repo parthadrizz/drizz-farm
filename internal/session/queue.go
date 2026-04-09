@@ -89,6 +89,13 @@ func (q *Queue) TryDequeue() *QueueEntry {
 	return entry
 }
 
+// PushFront puts an entry back at the front of the queue (for retry).
+func (q *Queue) PushFront(entry *QueueEntry) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.entries = append([]*QueueEntry{entry}, q.entries...)
+}
+
 // Depth returns the number of entries in the queue.
 func (q *Queue) Depth() int {
 	q.mu.Lock()

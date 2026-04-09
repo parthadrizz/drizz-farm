@@ -25,10 +25,11 @@ type Broker struct {
 	mu       sync.RWMutex
 	sessions map[string]*Session
 
-	pool   *pool.Pool
-	queue  *Queue
-	cfg    *config.Config
-	hostIP string
+	pool      *pool.Pool
+	queue     *Queue
+	cfg       *config.Config
+	hostIP    string
+	readyCh   chan struct{} // signaled when pool has a free emulator
 
 	cancel context.CancelFunc
 }
@@ -36,13 +37,26 @@ type Broker struct {
 // NewBroker creates a new session broker.
 func NewBroker(cfg *config.Config, p *pool.Pool) *Broker {
 	queueTimeout := time.Duration(cfg.Pool.QueueTimeoutSeconds) * time.Second
-	return &Broker{
+	readyCh := make(chan struct{}, 10) // buffered so notify never blocks
+
+	b := &Broker{
 		sessions: make(map[string]*Session),
 		pool:     p,
 		queue:    NewQueue(cfg.Pool.QueueMaxSize, queueTimeout),
 		cfg:      cfg,
 		hostIP:   detectLANIP(),
+		readyCh:  readyCh,
 	}
+
+	// Register callback — pool notifies us when emulator becomes warm
+	p.SetOnReady(func() {
+		select {
+		case readyCh <- struct{}{}:
+		default: // don't block if channel is full
+		}
+	})
+
+	return b
 }
 
 // Start begins the broker's background tasks (timeout enforcement, queue draining).
@@ -251,41 +265,54 @@ func (b *Broker) enforceTimeouts(ctx context.Context) {
 }
 
 // queueDrainLoop tries to fulfill queued requests when emulators become available.
+// Listens on readyCh (notified by pool) instead of blind polling.
 func (b *Broker) queueDrainLoop(ctx context.Context) {
-	ticker := time.NewTicker(2 * time.Second)
+	// Also keep a slow poll as fallback (in case notification is missed)
+	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-b.readyCh:
+			// Pool says an emulator is warm — try to serve queue immediately
+			b.tryDrainQueue(ctx)
 		case <-ticker.C:
+			// Fallback poll
 			b.tryDrainQueue(ctx)
 		}
 	}
 }
 
 func (b *Broker) tryDrainQueue(ctx context.Context) {
-	for {
-		entry := b.queue.TryDequeue()
-		if entry == nil {
+	if b.queue.Depth() == 0 {
+		return
+	}
+
+	// Peek at the front — only dequeue if we can actually allocate
+	entry := b.queue.TryDequeue()
+	if entry == nil {
+		return
+	}
+
+	inst, err := b.pool.Allocate(ctx, entry.Request.Profile)
+	if err != nil {
+		if errors.Is(err, pool.ErrPoolExhausted) {
+			// Put it back — try again next tick when an emulator might be free
+			b.queue.PushFront(entry)
 			return
 		}
-
-		inst, err := b.pool.Allocate(ctx, entry.Request.Profile)
-		if err != nil {
-			if errors.Is(err, pool.ErrPoolExhausted) {
-				// Put it back (simplification: just fail it, user can retry)
-				entry.ResultCh <- QueueResult{Err: ErrQueueTimeout}
-				return
-			}
-			entry.ResultCh <- QueueResult{Err: err}
-			continue
-		}
-
-		sess := b.createSessionFromInstance(inst, entry.Request)
-		entry.ResultCh <- QueueResult{Session: sess}
+		// Real error — fail this request
+		entry.ResultCh <- QueueResult{Err: err}
+		return
 	}
+
+	sess := b.createSessionFromInstance(inst, entry.Request)
+	entry.ResultCh <- QueueResult{Session: sess}
+
+	// Try to drain more if there are still entries
+	b.tryDrainQueue(ctx)
 }
 
 // detectLANIP returns the first non-loopback IPv4 address.

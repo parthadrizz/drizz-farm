@@ -31,6 +31,9 @@ type PoolStatus struct {
 	Instances     []InstanceSnapshot `json:"instances"`
 }
 
+// OnEmulatorReady is called when an emulator becomes warm (ready for allocation).
+type OnEmulatorReady func()
+
 // Pool manages the emulator fleet.
 type Pool struct {
 	mu sync.RWMutex
@@ -45,7 +48,8 @@ type Pool struct {
 	portAlloc *android.PortAllocator
 	runner    android.CommandRunner
 
-	cancel context.CancelFunc
+	onReady OnEmulatorReady // notify when emulator becomes warm
+	cancel  context.CancelFunc
 }
 
 // New creates a new Pool.
@@ -60,6 +64,17 @@ func New(cfg *config.Config, sdk *android.SDK, runner android.CommandRunner) *Po
 		emuCtrl:   android.NewEmulatorController(sdk, runner),
 		portAlloc: android.NewPortAllocator(cfg.Pool.PortRangeMin, cfg.Pool.PortRangeMax),
 		runner:    runner,
+	}
+}
+
+// SetOnReady sets the callback for when an emulator becomes warm.
+func (p *Pool) SetOnReady(fn OnEmulatorReady) {
+	p.onReady = fn
+}
+
+func (p *Pool) notifyReady() {
+	if p.onReady != nil {
+		go p.onReady()
 	}
 }
 
@@ -191,8 +206,10 @@ func (p *Pool) Release(ctx context.Context, instanceID string) error {
 		}
 		if err := inst.TransitionTo(StateWarm); err != nil {
 			log.Error().Err(err).Str("instance", instanceID).Msg("pool: transition to warm failed")
+			return
 		}
-		inst.TouchActivity() // Reset idle timer
+		inst.TouchActivity()
+		p.notifyReady() // Signal queue that an emulator is free
 	}()
 
 	return nil
@@ -340,6 +357,8 @@ func (p *Pool) bootExisting(ctx context.Context, avdName string, profileName str
 		Str("serial", inst.Serial).
 		Str("profile", profileName).
 		Msg("pool: emulator warm and ready")
+
+	p.notifyReady()
 
 	// Watch process — detect death immediately
 	go p.watchProcess(inst)
