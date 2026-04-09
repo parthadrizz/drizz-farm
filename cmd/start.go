@@ -22,6 +22,7 @@ import (
 	"github.com/drizz-dev/drizz-farm/internal/license"
 	"github.com/drizz-dev/drizz-farm/internal/pool"
 	"github.com/drizz-dev/drizz-farm/internal/session"
+	"github.com/drizz-dev/drizz-farm/internal/store"
 )
 
 var visibleEmulators bool
@@ -100,6 +101,15 @@ func runStart(cmd *cobra.Command, args []string) error {
 		log.Info().Msg("emulator windows will be visible (--visible flag)")
 	}
 
+	// SQLite store
+	dataStore, err := store.New(cfg.DataDir())
+	if err != nil {
+		log.Warn().Err(err).Msg("SQLite store failed (continuing without persistence)")
+	} else {
+		defer dataStore.Close()
+		log.Info().Msg("SQLite store opened")
+	}
+
 	// Initialize pool — boots nothing, emulators start on-demand
 	runner := &android.DefaultRunner{}
 	adb := android.NewADBClient(sdk, runner)
@@ -153,6 +163,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 		StartedAt: startedAt,
 		SDK:       sdk,
 		Runner:    runner,
+		Store:     dataStore,
 	})
 
 	errCh := make(chan error, 1)

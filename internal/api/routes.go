@@ -26,6 +26,11 @@ func RegisterRoutes(r chi.Router, cfg *config.Config, p *pool.Pool, b *session.B
 		runner: deps.Runner,
 	}
 	cfgH := &configHandlers{cfg: cfg}
+	histH := &historyHandlers{store: deps.Store}
+	snapH := &snapshotHandlers{
+		pool: p,
+		adb:  android.NewADBClient(deps.SDK, deps.Runner),
+	}
 	screenH := &screenHandlers{
 		pool: p,
 		adb:  android.NewADBClient(deps.SDK, deps.Runner),
@@ -51,11 +56,21 @@ func RegisterRoutes(r chi.Router, cfg *config.Config, p *pool.Pool, b *session.B
 		r.Get("/sessions/{id}/screen", screenH.StreamScreen)
 		r.Get("/sessions/{id}/input", screenH.SendInput)
 
+		// Snapshots
+		r.Post("/sessions/{id}/snapshot/save", snapH.Save)
+		r.Post("/sessions/{id}/snapshot/restore", snapH.Restore)
+		r.Get("/sessions/{id}/snapshots", snapH.List)
+		r.Delete("/sessions/{id}/snapshot/{name}", snapH.Delete)
+
 		// Config
 		r.Get("/config", cfgH.GetConfig)
 		r.Put("/config", cfgH.UpdateConfig)
 		r.Get("/config/raw", cfgH.GetConfigRaw)
 		r.Put("/config/raw", cfgH.SaveConfigRaw)
+
+		// History
+		r.Get("/history/sessions", histH.SessionHistory)
+		r.Get("/history/events", histH.Events)
 
 		// Discovery (for Create Wizard)
 		r.Route("/discovery", func(r chi.Router) {

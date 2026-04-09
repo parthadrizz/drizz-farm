@@ -11,6 +11,7 @@ import (
 
 	"github.com/drizz-dev/drizz-farm/internal/android"
 	"github.com/drizz-dev/drizz-farm/internal/config"
+	"github.com/drizz-dev/drizz-farm/internal/store"
 	"github.com/drizz-dev/drizz-farm/internal/license"
 	"github.com/drizz-dev/drizz-farm/internal/pool"
 	"github.com/drizz-dev/drizz-farm/internal/session"
@@ -21,6 +22,7 @@ type ServerDeps struct {
 	StartedAt time.Time
 	SDK       *android.SDK
 	Runner    android.CommandRunner
+	Store     *store.Store
 }
 
 // Server is the HTTP API server.
