@@ -54,7 +54,8 @@
       "Bash(curl -s http://127.0.0.1:9401/)",
       "Bash(curl -s http://127.0.0.1:9401/create)",
       "Bash(rm -rf ../internal/api/dashboard)",
-      "Bash(cp -r dist ../internal/api/dashboard)"
+      "Bash(cp -r dist ../internal/api/dashboard)",
+      "Bash(curl -s http://127.0.0.1:9401/api/v1/config)"
     ]
   }
 }

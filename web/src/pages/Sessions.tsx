@@ -6,8 +6,6 @@ export function Sessions() {
   const [active, setActive] = useState(0);
   const [queued, setQueued] = useState(0);
   const [error, setError] = useState('');
-  const [creating, setCreating] = useState(false);
-
   const refresh = async () => {
     try {
       const r = await api.listSessions();
@@ -16,15 +14,6 @@ export function Sessions() {
   };
 
   useEffect(() => { refresh(); const i = setInterval(refresh, 3000); return () => clearInterval(i); }, []);
-
-  const handleCreate = async () => {
-    setCreating(true);
-    try {
-      await api.createSession('');
-      refresh();
-    } catch (e: any) { alert(e.message); }
-    setCreating(false);
-  };
 
   const copyConnection = (s: Session) => {
     const text = s.connection.adb_serial
@@ -40,10 +29,6 @@ export function Sessions() {
         <div className="flex items-center gap-4">
           <span className="text-sm text-emerald-400">{active} active</span>
           <span className="text-sm text-yellow-400">{queued} queued</span>
-          <button onClick={handleCreate} disabled={creating}
-            className="px-4 py-2 bg-emerald-500 text-white rounded text-sm font-medium hover:bg-emerald-400 transition disabled:opacity-50">
-            {creating ? 'Creating...' : '+ New Session'}
-          </button>
         </div>
       </div>
 
