@@ -102,7 +102,12 @@ func runStart(cmd *cobra.Command, args []string) error {
 
 	// Initialize pool — boots nothing, emulators start on-demand
 	runner := &android.DefaultRunner{}
+	adb := android.NewADBClient(sdk, runner)
 	emulatorPool := pool.New(cfg, sdk, runner)
+
+	// Register USB device scanner — auto-discovers plugged-in phones
+	emulatorPool.RegisterScanner(android.NewUSBScanner(adb))
+
 	if err := emulatorPool.Start(ctx); err != nil {
 		return fmt.Errorf("pool start: %w", err)
 	}
@@ -112,7 +117,6 @@ func runStart(cmd *cobra.Command, args []string) error {
 	broker.Start(ctx)
 
 	// Health checker
-	adb := android.NewADBClient(sdk, runner)
 	probes := []health.Probe{
 		health.NewBootProbe(adb),
 	}

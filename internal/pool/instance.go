@@ -3,144 +3,146 @@ package pool
 import (
 	"sync"
 	"time"
-
-	"github.com/drizz-dev/drizz-farm/internal/android"
 )
 
-// EmulatorInstance tracks the full state of one emulator in the pool.
-type EmulatorInstance struct {
+// DeviceInstance tracks the pool state of any device (emulator or physical).
+type DeviceInstance struct {
 	mu sync.RWMutex
 
-	ID          string            `json:"id"`
-	AVDName     string            `json:"avd_name"`
-	ProfileName string            `json:"profile"`
-	State       EmulatorState     `json:"state"`
-	Ports       android.PortPair  `json:"ports"`
-	Serial      string            `json:"serial"` // e.g., "emulator-5554"
-	SessionID    string            `json:"session_id,omitempty"`
-	CreatedAt    time.Time         `json:"created_at"`
-	AllocatedAt  *time.Time        `json:"allocated_at,omitempty"`
-	LastActivity time.Time         `json:"last_activity"`
-	LastHealthy  time.Time         `json:"last_healthy"`
-	HealthFails int               `json:"health_fails"`
-	Process     *android.EmulatorProcess `json:"-"`
+	ID           string      `json:"id"`
+	ProfileName  string      `json:"profile"`
+	State        DeviceState `json:"state"`
+	SessionID    string      `json:"session_id,omitempty"`
+	CreatedAt    time.Time   `json:"created_at"`
+	AllocatedAt  *time.Time  `json:"allocated_at,omitempty"`
+	LastActivity time.Time   `json:"last_activity"`
+	LastHealthy  time.Time   `json:"last_healthy"`
+	HealthFails  int         `json:"health_fails"`
+
+	Device Device `json:"-"` // the actual device — not serialized
 }
 
-// TransitionTo attempts a state transition. Returns an error if the transition is invalid.
-func (e *EmulatorInstance) TransitionTo(target EmulatorState) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+// TransitionTo attempts a state transition. Returns an error if invalid.
+func (d *DeviceInstance) TransitionTo(target DeviceState) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 
-	if !e.State.CanTransitionTo(target) {
-		return &InvalidTransitionError{From: e.State, To: target, InstanceID: e.ID}
+	if !d.State.CanTransitionTo(target) {
+		return &InvalidTransitionError{From: d.State, To: target, InstanceID: d.ID}
 	}
-	e.State = target
+	d.State = target
 	return nil
 }
 
 // GetState returns the current state (thread-safe).
-func (e *EmulatorInstance) GetState() EmulatorState {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	return e.State
+func (d *DeviceInstance) GetState() DeviceState {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.State
 }
 
 // SetSession assigns a session to this instance.
-func (e *EmulatorInstance) SetSession(sessionID string) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.SessionID = sessionID
+func (d *DeviceInstance) SetSession(sessionID string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.SessionID = sessionID
 	now := time.Now()
-	e.AllocatedAt = &now
-	e.LastActivity = now
-}
-
-// TouchActivity updates the last activity timestamp.
-func (e *EmulatorInstance) TouchActivity() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.LastActivity = time.Now()
-}
-
-// IdleSince returns how long since last activity.
-func (e *EmulatorInstance) IdleSince() time.Duration {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	if e.LastActivity.IsZero() {
-		return time.Since(e.CreatedAt)
-	}
-	return time.Since(e.LastActivity)
+	d.AllocatedAt = &now
+	d.LastActivity = now
 }
 
 // ClearSession removes session assignment.
-func (e *EmulatorInstance) ClearSession() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.SessionID = ""
-	e.AllocatedAt = nil
+func (d *DeviceInstance) ClearSession() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.SessionID = ""
+	d.AllocatedAt = nil
+}
+
+// TouchActivity updates the last activity timestamp.
+func (d *DeviceInstance) TouchActivity() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.LastActivity = time.Now()
+}
+
+// IdleSince returns how long since last activity.
+func (d *DeviceInstance) IdleSince() time.Duration {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	if d.LastActivity.IsZero() {
+		return time.Since(d.CreatedAt)
+	}
+	return time.Since(d.LastActivity)
 }
 
 // RecordHealthCheck records a health check result.
-func (e *EmulatorInstance) RecordHealthCheck(healthy bool) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+func (d *DeviceInstance) RecordHealthCheck(healthy bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	if healthy {
-		e.HealthFails = 0
-		e.LastHealthy = time.Now()
+		d.HealthFails = 0
+		d.LastHealthy = time.Now()
 	} else {
-		e.HealthFails++
+		d.HealthFails++
 	}
 }
 
 // IsHealthy returns true if the instance is considered healthy.
-func (e *EmulatorInstance) IsHealthy() bool {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	return e.HealthFails == 0
+func (d *DeviceInstance) IsHealthy() bool {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.HealthFails == 0
 }
 
-// Snapshot returns a read-only copy of the instance state for API responses.
-func (e *EmulatorInstance) Snapshot() InstanceSnapshot {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	return InstanceSnapshot{
-		ID:           e.ID,
-		AVDName:      e.AVDName,
-		ProfileName:  e.ProfileName,
-		State:        e.State,
-		Serial:       e.Serial,
-		ConsolePort:  e.Ports.Console,
-		ADBPort:      e.Ports.ADB,
-		SessionID:    e.SessionID,
-		CreatedAt:    e.CreatedAt,
-		AllocatedAt:  e.AllocatedAt,
-		LastActivity: e.LastActivity,
-		LastHealthy:  e.LastHealthy,
-		HealthFails:  e.HealthFails,
+// Snapshot returns a read-only copy for API responses.
+func (d *DeviceInstance) Snapshot() InstanceSnapshot {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	snap := InstanceSnapshot{
+		ID:           d.ID,
+		ProfileName:  d.ProfileName,
+		State:        d.State,
+		SessionID:    d.SessionID,
+		CreatedAt:    d.CreatedAt,
+		AllocatedAt:  d.AllocatedAt,
+		LastActivity: d.LastActivity,
+		LastHealthy:  d.LastHealthy,
+		HealthFails:  d.HealthFails,
 	}
+
+	if d.Device != nil {
+		snap.DeviceKind = d.Device.Kind()
+		snap.DeviceName = d.Device.DisplayName()
+		snap.Serial = d.Device.Serial()
+		snap.Connection = d.Device.GetConnectionInfo()
+	}
+
+	return snap
 }
 
-// InstanceSnapshot is a read-only copy of instance state, safe for JSON serialization.
+// InstanceSnapshot is a read-only copy safe for JSON serialization.
 type InstanceSnapshot struct {
-	ID           string        `json:"id"`
-	AVDName      string        `json:"avd_name"`
-	ProfileName  string        `json:"profile"`
-	State        EmulatorState `json:"state"`
-	Serial       string        `json:"serial"`
-	ConsolePort  int           `json:"console_port"`
-	ADBPort      int           `json:"adb_port"`
-	SessionID    string        `json:"session_id,omitempty"`
-	CreatedAt    time.Time     `json:"created_at"`
-	AllocatedAt  *time.Time    `json:"allocated_at,omitempty"`
-	LastActivity time.Time     `json:"last_activity"`
-	LastHealthy  time.Time     `json:"last_healthy"`
-	HealthFails  int           `json:"health_fails"`
+	ID           string         `json:"id"`
+	DeviceKind   DeviceKind     `json:"device_kind"`
+	DeviceName   string         `json:"device_name"`
+	ProfileName  string         `json:"profile"`
+	State        DeviceState    `json:"state"`
+	Serial       string         `json:"serial"`
+	Connection   ConnectionInfo `json:"connection"`
+	SessionID    string         `json:"session_id,omitempty"`
+	CreatedAt    time.Time      `json:"created_at"`
+	AllocatedAt  *time.Time     `json:"allocated_at,omitempty"`
+	LastActivity time.Time      `json:"last_activity"`
+	LastHealthy  time.Time      `json:"last_healthy"`
+	HealthFails  int            `json:"health_fails"`
 }
 
 // InvalidTransitionError indicates an invalid state transition attempt.
 type InvalidTransitionError struct {
-	From       EmulatorState
-	To         EmulatorState
+	From       DeviceState
+	To         DeviceState
 	InstanceID string
 }
 

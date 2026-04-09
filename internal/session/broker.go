@@ -171,7 +171,7 @@ func (b *Broker) QueueDepth() int {
 	return b.queue.Depth()
 }
 
-func (b *Broker) createSessionFromInstance(inst *pool.EmulatorInstance, req CreateSessionRequest) *Session {
+func (b *Broker) createSessionFromInstance(inst *pool.DeviceInstance, req CreateSessionRequest) *Session {
 	sessionID := uuid.New().String()[:12]
 
 	timeout := time.Duration(b.cfg.Pool.SessionTimeoutMinutes) * time.Minute
@@ -190,12 +190,7 @@ func (b *Broker) createSessionFromInstance(inst *pool.EmulatorInstance, req Crea
 		Platform:   req.Platform,
 		InstanceID: inst.ID,
 		State:      SessionActive,
-		Connection: ConnectionInfo{
-			Host:        b.hostIP,
-			ADBPort:     inst.Ports.ADB,
-			ADBSerial:   inst.Serial,
-			ConsolePort: inst.Ports.Console,
-		},
+		Connection: b.buildConnectionInfo(inst),
 		ClientID:   req.ClientID,
 		ClientName: req.ClientName,
 		Source:     req.Source,
@@ -214,9 +209,9 @@ func (b *Broker) createSessionFromInstance(inst *pool.EmulatorInstance, req Crea
 		Str("session", sessionID).
 		Str("instance", inst.ID).
 		Str("profile", req.Profile).
-		Str("serial", inst.Serial).
+		Str("serial", inst.Device.Serial()).
 		Str("host", b.hostIP).
-		Int("adb_port", inst.Ports.ADB).
+		Str("device", inst.Device.DisplayName()).
 		Time("expires", sess.ExpiresAt).
 		Msg("broker: session created")
 
@@ -313,6 +308,21 @@ func (b *Broker) tryDrainQueue(ctx context.Context) {
 
 	// Try to drain more if there are still entries
 	b.tryDrainQueue(ctx)
+}
+
+func (b *Broker) buildConnectionInfo(inst *pool.DeviceInstance) ConnectionInfo {
+	if inst.Device == nil {
+		return ConnectionInfo{Host: b.hostIP}
+	}
+	devConn := inst.Device.GetConnectionInfo()
+	return ConnectionInfo{
+		Host:        b.hostIP,
+		DeviceKind:  devConn.DeviceKind,
+		ADBPort:     devConn.ADBPort,
+		ADBSerial:   devConn.ADBSerial,
+		ConsolePort: devConn.ConsolePort,
+		UDID:        devConn.UDID,
+	}
 }
 
 // detectLANIP returns the first non-loopback IPv4 address.

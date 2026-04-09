@@ -25,9 +25,8 @@ func (p *mockProbe) Check(_ context.Context, _ string) error {
 func TestCheckerRegistration(t *testing.T) {
 	checker := NewChecker(nil, 15*time.Second, 3, nil)
 
-	inst := &pool.EmulatorInstance{
-		ID:     "test-1",
-		Serial: "emulator-5554",
+	inst := &pool.DeviceInstance{
+		ID: "test-1",
 	}
 
 	checker.Register(inst)
@@ -54,9 +53,8 @@ func TestCheckerCallsOnUnhealthy(t *testing.T) {
 		},
 	)
 
-	inst := &pool.EmulatorInstance{
-		ID:     "test-1",
-		Serial: "emulator-5554",
+	inst := &pool.DeviceInstance{
+		ID: "test-1",
 		State:  pool.StateWarm,
 	}
 	checker.Register(inst)
@@ -82,9 +80,8 @@ func TestCheckerHealthyInstance(t *testing.T) {
 	probe := &mockProbe{name: "test", healthy: true}
 	checker := NewChecker([]Probe{probe}, 100*time.Millisecond, 3, nil)
 
-	inst := &pool.EmulatorInstance{
-		ID:     "test-1",
-		Serial: "emulator-5554",
+	inst := &pool.DeviceInstance{
+		ID: "test-1",
 		State:  pool.StateWarm,
 	}
 	checker.Register(inst)

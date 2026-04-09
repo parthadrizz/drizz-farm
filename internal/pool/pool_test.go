@@ -5,15 +5,15 @@ import (
 	"time"
 )
 
-func TestEmulatorStateTransitions(t *testing.T) {
+func TestDeviceStateTransitions(t *testing.T) {
 	tests := []struct {
-		from    EmulatorState
-		to      EmulatorState
+		from    DeviceState
+		to      DeviceState
 		allowed bool
 	}{
 		{StateCreating, StateBooting, true},
 		{StateCreating, StateError, true},
-		{StateCreating, StateWarm, false},
+		{StateCreating, StateWarm, true}, // USB devices skip boot
 		{StateBooting, StateWarm, true},
 		{StateBooting, StateError, true},
 		{StateBooting, StateAllocated, false},
@@ -39,7 +39,7 @@ func TestEmulatorStateTransitions(t *testing.T) {
 	}
 }
 
-func TestEmulatorStateString(t *testing.T) {
+func TestDeviceStateString(t *testing.T) {
 	if StateWarm.String() != "warm" {
 		t.Errorf("expected 'warm', got '%s'", StateWarm.String())
 	}
@@ -49,7 +49,7 @@ func TestEmulatorStateString(t *testing.T) {
 }
 
 func TestInstanceTransition(t *testing.T) {
-	inst := &EmulatorInstance{
+	inst := &DeviceInstance{
 		ID:    "test-1",
 		State: StateWarm,
 	}
@@ -69,7 +69,7 @@ func TestInstanceTransition(t *testing.T) {
 }
 
 func TestInstanceSessionAssignment(t *testing.T) {
-	inst := &EmulatorInstance{
+	inst := &DeviceInstance{
 		ID:    "test-1",
 		State: StateAllocated,
 	}
@@ -92,7 +92,7 @@ func TestInstanceSessionAssignment(t *testing.T) {
 }
 
 func TestInstanceHealthTracking(t *testing.T) {
-	inst := &EmulatorInstance{ID: "test-1"}
+	inst := &DeviceInstance{ID: "test-1"}
 
 	inst.RecordHealthCheck(true)
 	if !inst.IsHealthy() {
@@ -122,12 +122,10 @@ func TestInstanceHealthTracking(t *testing.T) {
 
 func TestInstanceSnapshot(t *testing.T) {
 	now := time.Now()
-	inst := &EmulatorInstance{
+	inst := &DeviceInstance{
 		ID:          "test-1",
-		AVDName:     "drizz_pixel_7_0",
 		ProfileName: "pixel_7_api34",
 		State:       StateWarm,
-		Serial:      "emulator-5554",
 		CreatedAt:   now,
 	}
 

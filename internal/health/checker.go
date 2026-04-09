@@ -22,7 +22,7 @@ type Checker struct {
 	threshold int
 	onUnhealthy OnUnhealthy
 
-	instances map[string]*pool.EmulatorInstance
+	instances map[string]*pool.DeviceInstance
 	cancel    context.CancelFunc
 }
 
@@ -33,7 +33,7 @@ func NewChecker(probes []Probe, interval time.Duration, threshold int, onUnhealt
 		interval:    interval,
 		threshold:   threshold,
 		onUnhealthy: onUnhealthy,
-		instances:   make(map[string]*pool.EmulatorInstance),
+		instances:   make(map[string]*pool.DeviceInstance),
 	}
 }
 
@@ -51,11 +51,15 @@ func (c *Checker) Stop() {
 }
 
 // Register adds an instance to be monitored.
-func (c *Checker) Register(inst *pool.EmulatorInstance) {
+func (c *Checker) Register(inst *pool.DeviceInstance) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.instances[inst.ID] = inst
-	log.Debug().Str("instance", inst.ID).Str("serial", inst.Serial).Msg("health: registered instance")
+	serial := ""
+	if inst.Device != nil {
+		serial = inst.Device.Serial()
+	}
+	log.Debug().Str("instance", inst.ID).Str("serial", serial).Msg("health: registered instance")
 }
 
 // Unregister removes an instance from monitoring.
@@ -83,7 +87,7 @@ func (c *Checker) loop(ctx context.Context) {
 func (c *Checker) checkAll(ctx context.Context) {
 	c.mu.Lock()
 	// Snapshot the instances to check
-	toCheck := make([]*pool.EmulatorInstance, 0, len(c.instances))
+	toCheck := make([]*pool.DeviceInstance, 0, len(c.instances))
 	for _, inst := range c.instances {
 		state := inst.GetState()
 		// Only check warm and allocated instances
@@ -98,17 +102,24 @@ func (c *Checker) checkAll(ctx context.Context) {
 	}
 }
 
-func (c *Checker) checkInstance(ctx context.Context, inst *pool.EmulatorInstance) {
+func (c *Checker) checkInstance(ctx context.Context, inst *pool.DeviceInstance) {
 	healthy := true
-	for _, probe := range c.probes {
-		if err := probe.Check(ctx, inst.Serial); err != nil {
-			log.Warn().
-				Err(err).
-				Str("instance", inst.ID).
-				Str("probe", probe.Name()).
-				Msg("health: probe failed")
+
+	// Use device's own health check if available
+	if inst.Device != nil {
+		if err := inst.Device.HealthCheck(ctx); err != nil {
+			log.Warn().Err(err).Str("instance", inst.ID).Msg("health: device check failed")
 			healthy = false
-			break
+		}
+	} else {
+		// Fallback to probes
+		serial := ""
+		for _, probe := range c.probes {
+			if err := probe.Check(ctx, serial); err != nil {
+				log.Warn().Err(err).Str("instance", inst.ID).Str("probe", probe.Name()).Msg("health: probe failed")
+				healthy = false
+				break
+			}
 		}
 	}
 

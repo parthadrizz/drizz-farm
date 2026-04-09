@@ -15,7 +15,7 @@ import (
 )
 
 var (
-	ErrPoolExhausted = errors.New("pool exhausted: no emulators available")
+	ErrPoolExhausted  = errors.New("pool exhausted: no devices available")
 	ErrProfileNotFound = errors.New("profile not found")
 	ErrInstanceNotFound = errors.New("instance not found")
 )
@@ -31,16 +31,17 @@ type PoolStatus struct {
 	Instances     []InstanceSnapshot `json:"instances"`
 }
 
-// OnEmulatorReady is called when an emulator becomes warm (ready for allocation).
-type OnEmulatorReady func()
+// OnDeviceReady is called when a device becomes warm (ready for allocation).
+type OnDeviceReady func()
 
-// Pool manages the emulator fleet.
+// Pool manages a unified fleet of emulators and physical devices.
 type Pool struct {
 	mu sync.RWMutex
 
 	cfg       *config.Config
-	instances map[string]*EmulatorInstance // keyed by instance ID
+	instances map[string]*DeviceInstance
 
+	// Android emulator dependencies
 	sdk       *android.SDK
 	adb       *android.ADBClient
 	avdMgr    *android.AVDManager
@@ -48,7 +49,10 @@ type Pool struct {
 	portAlloc *android.PortAllocator
 	runner    android.CommandRunner
 
-	onReady OnEmulatorReady // notify when emulator becomes warm
+	// Device scanners (USB auto-discovery)
+	scanners []DeviceScanner
+
+	onReady OnDeviceReady
 	cancel  context.CancelFunc
 }
 
@@ -57,7 +61,7 @@ func New(cfg *config.Config, sdk *android.SDK, runner android.CommandRunner) *Po
 	adb := android.NewADBClient(sdk, runner)
 	return &Pool{
 		cfg:       cfg,
-		instances: make(map[string]*EmulatorInstance),
+		instances: make(map[string]*DeviceInstance),
 		sdk:       sdk,
 		adb:       adb,
 		avdMgr:    android.NewAVDManager(sdk, runner),
@@ -67,9 +71,14 @@ func New(cfg *config.Config, sdk *android.SDK, runner android.CommandRunner) *Po
 	}
 }
 
-// SetOnReady sets the callback for when an emulator becomes warm.
-func (p *Pool) SetOnReady(fn OnEmulatorReady) {
+// SetOnReady sets the callback for when a device becomes warm.
+func (p *Pool) SetOnReady(fn OnDeviceReady) {
 	p.onReady = fn
+}
+
+// RegisterScanner adds a device scanner for auto-discovery.
+func (p *Pool) RegisterScanner(s DeviceScanner) {
+	p.scanners = append(p.scanners, s)
 }
 
 func (p *Pool) notifyReady() {
@@ -78,40 +87,43 @@ func (p *Pool) notifyReady() {
 	}
 }
 
-// Start initializes the pool — boots nothing, just sets up monitoring.
-// Emulators are booted on-demand when sessions are created.
+// Start initializes the pool — boots nothing, devices start on-demand.
 func (p *Pool) Start(ctx context.Context) error {
 	ctx, p.cancel = context.WithCancel(ctx)
 
 	log.Info().
 		Int("max_concurrent", p.cfg.Pool.MaxConcurrent).
-		Msg("pool: ready (emulators boot on-demand)")
+		Int("scanners", len(p.scanners)).
+		Msg("pool: ready (devices boot on-demand)")
 
-	// Start maintenance loop (process liveness, idle timeout, cleanup)
 	go p.maintenanceLoop(ctx)
-
 	return nil
 }
 
-// Stop gracefully shuts down all emulators.
+// Stop gracefully shuts down all managed devices.
 func (p *Pool) Stop(ctx context.Context) error {
 	if p.cancel != nil {
 		p.cancel()
 	}
 
 	p.mu.Lock()
-	instances := make([]*EmulatorInstance, 0, len(p.instances))
+	instances := make([]*DeviceInstance, 0, len(p.instances))
 	for _, inst := range p.instances {
 		instances = append(instances, inst)
 	}
 	p.mu.Unlock()
 
-	log.Info().Int("instances", len(instances)).Msg("pool: stopping all emulators")
+	log.Info().Int("instances", len(instances)).Msg("pool: stopping")
 
 	var errs []error
 	for _, inst := range instances {
-		if err := p.destroyInstance(inst); err != nil {
-			errs = append(errs, err)
+		if inst.Device != nil && inst.Device.CanDestroy() {
+			if err := p.destroyInstance(ctx, inst); err != nil {
+				errs = append(errs, err)
+			}
+		} else {
+			// USB devices — just remove from pool, don't shut down
+			p.removeInstance(inst.ID)
 		}
 	}
 
@@ -121,15 +133,14 @@ func (p *Pool) Stop(ctx context.Context) error {
 	return nil
 }
 
-// Allocate finds a warm emulator and transitions it to allocated.
-// If none warm, boots one on-demand from available AVDs on disk.
-// profileName can be empty to match any available emulator.
-func (p *Pool) Allocate(ctx context.Context, profileName string) (*EmulatorInstance, error) {
+// Allocate finds a warm device and transitions it to allocated.
+// If none warm, boots an emulator on-demand or picks a discovered USB device.
+func (p *Pool) Allocate(ctx context.Context, profileName string) (*DeviceInstance, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	// 1. Find a warm instance (prefer profile match, fall back to any)
-	var anyWarm *EmulatorInstance
+	var anyWarm *DeviceInstance
 	for _, inst := range p.instances {
 		if inst.GetState() != StateWarm {
 			continue
@@ -138,7 +149,7 @@ func (p *Pool) Allocate(ctx context.Context, profileName string) (*EmulatorInsta
 			if err := inst.TransitionTo(StateAllocated); err != nil {
 				continue
 			}
-			log.Info().Str("instance", inst.ID).Str("avd", inst.AVDName).Msg("pool: allocated (profile match)")
+			log.Info().Str("instance", inst.ID).Str("device", inst.Device.DisplayName()).Msg("pool: allocated (profile match)")
 			return inst, nil
 		}
 		if anyWarm == nil {
@@ -146,26 +157,25 @@ func (p *Pool) Allocate(ctx context.Context, profileName string) (*EmulatorInsta
 		}
 	}
 
-	// Allocate any warm if no profile match
 	if anyWarm != nil {
 		if err := anyWarm.TransitionTo(StateAllocated); err == nil {
-			log.Info().Str("instance", anyWarm.ID).Str("avd", anyWarm.AVDName).Msg("pool: allocated (any warm)")
+			log.Info().Str("instance", anyWarm.ID).Str("device", anyWarm.Device.DisplayName()).Msg("pool: allocated (any warm)")
 			return anyWarm, nil
 		}
 	}
 
-	// 2. No warm instance — boot on-demand if under capacity
+	// 2. No warm — boot emulator on-demand if under capacity
 	if len(p.instances) < p.cfg.Pool.MaxConcurrent {
-		avdName, err := p.findUnbootedAVD(ctx, profileName)
+		avdName, err := p.findUnbootedAVD(ctx)
 		if err != nil || avdName == "" {
 			return nil, ErrPoolExhausted
 		}
 
 		guessedProfile := guessProfileForAVD(avdName, p.cfg)
 
-		log.Info().Str("avd", avdName).Msg("pool: booting on-demand for session")
+		log.Info().Str("avd", avdName).Msg("pool: booting on-demand")
 		p.mu.Unlock()
-		inst, err := p.bootExisting(ctx, avdName, guessedProfile)
+		inst, err := p.bootEmulator(ctx, avdName, guessedProfile)
 		p.mu.Lock()
 		if err != nil {
 			return nil, fmt.Errorf("pool: on-demand boot failed: %w", err)
@@ -176,11 +186,10 @@ func (p *Pool) Allocate(ctx context.Context, profileName string) (*EmulatorInsta
 		return inst, nil
 	}
 
-	// 3. At capacity — all busy
 	return nil, ErrPoolExhausted
 }
 
-// Release returns an emulator to the pool after use.
+// Release returns a device to the pool after use.
 func (p *Pool) Release(ctx context.Context, instanceID string) error {
 	p.mu.RLock()
 	inst, ok := p.instances[instanceID]
@@ -190,16 +199,15 @@ func (p *Pool) Release(ctx context.Context, instanceID string) error {
 		return fmt.Errorf("%w: %s", ErrInstanceNotFound, instanceID)
 	}
 
-	log.Info().Str("instance", instanceID).Msg("pool: releasing emulator")
+	log.Info().Str("instance", instanceID).Str("device", inst.Device.DisplayName()).Msg("pool: releasing")
 
 	if err := inst.TransitionTo(StateResetting); err != nil {
 		return err
 	}
 	inst.ClearSession()
 
-	// Reset in background
 	go func() {
-		if err := p.resetInstance(ctx, inst); err != nil {
+		if err := inst.Device.Reset(ctx); err != nil {
 			log.Error().Err(err).Str("instance", instanceID).Msg("pool: reset failed")
 			_ = inst.TransitionTo(StateError)
 			return
@@ -209,7 +217,7 @@ func (p *Pool) Release(ctx context.Context, instanceID string) error {
 			return
 		}
 		inst.TouchActivity()
-		p.notifyReady() // Signal queue that an emulator is free
+		p.notifyReady()
 	}()
 
 	return nil
@@ -245,7 +253,7 @@ func (p *Pool) Status() PoolStatus {
 	return status
 }
 
-// Available returns count of warm emulators for a given profile (empty = any).
+// Available returns count of warm devices.
 func (p *Pool) Available(profileName string) int {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -262,19 +270,26 @@ func (p *Pool) Available(profileName string) int {
 }
 
 // GetInstance returns an instance by ID.
-func (p *Pool) GetInstance(id string) (*EmulatorInstance, bool) {
+func (p *Pool) GetInstance(id string) (*DeviceInstance, bool) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	inst, ok := p.instances[id]
 	return inst, ok
 }
 
-// bootExisting boots an AVD that already exists on disk.
-// Used by warmup (start) — never creates AVDs.
-func (p *Pool) bootExisting(ctx context.Context, avdName string, profileName string) (*EmulatorInstance, error) {
+// --- Emulator Boot ---
+
+// bootEmulator boots an existing AVD as an EmulatorDevice.
+func (p *Pool) bootEmulator(ctx context.Context, avdName string, profileName string) (*DeviceInstance, error) {
 	profile, ok := p.cfg.Pool.Profiles.Android[profileName]
 	if !ok {
-		return nil, fmt.Errorf("%w: %s", ErrProfileNotFound, profileName)
+		// Use a default profile for unknown AVDs
+		profile = config.AndroidProfile{
+			RAMMB:              2048,
+			DiskSizeMB:         4096,
+			GPU:                "host",
+			BootTimeoutSeconds: 120,
+		}
 	}
 
 	// Verify AVD exists
@@ -283,69 +298,34 @@ func (p *Pool) bootExisting(ctx context.Context, avdName string, profileName str
 		return nil, fmt.Errorf("check AVD %s: %w", avdName, err)
 	}
 	if !exists {
-		return nil, fmt.Errorf("AVD %s does not exist (run 'drizz-farm create' first)", avdName)
+		return nil, fmt.Errorf("AVD %s does not exist", avdName)
 	}
 
-	id := uuid.New().String()[:8]
-	inst := &EmulatorInstance{
-		ID:          id,
-		AVDName:     avdName,
-		ProfileName: profileName,
-		State:       StateCreating,
-		CreatedAt:   time.Now(),
-	}
+	// Create EmulatorDevice
+	dev := android.NewEmulatorDevice(android.EmulatorDeviceConfig{
+		AVDName:   avdName,
+		Profile:   profile,
+		EmuCtrl:   p.emuCtrl,
+		ADB:       p.adb,
+		PortAlloc: p.portAlloc,
+		Visible:   p.cfg.Pool.VisibleEmulators,
+	})
 
-	// Register instance early
-	p.mu.Lock()
-	p.instances[id] = inst
-	p.mu.Unlock()
+	// Create instance
+	inst := p.createInstance(dev, profileName)
 
-	// Allocate ports
-	ports, err := p.portAlloc.Allocate()
-	if err != nil {
-		p.removeInstance(id)
-		return nil, fmt.Errorf("allocate ports: %w", err)
-	}
-	inst.Ports = ports
-	inst.Serial = fmt.Sprintf("emulator-%d", ports.Console)
-
-	// Transition to booting
+	// Boot
 	if err := inst.TransitionTo(StateBooting); err != nil {
-		p.portAlloc.Release(ports)
-		p.removeInstance(id)
+		p.removeInstance(inst.ID)
 		return nil, err
 	}
 
-	// Boot emulator
-	bootOpts := android.BootOptions{
-		Profile:  profile,
-		Ports:    ports,
-		NoWindow: !p.cfg.Pool.VisibleEmulators,
-		NoAudio:  true,
+	if err := dev.Prepare(ctx); err != nil {
+		p.removeInstance(inst.ID)
+		return nil, fmt.Errorf("boot %s: %w", avdName, err)
 	}
 
-	// Check if clean snapshot exists (for fast reboot)
-	// First boot: no snapshot → full boot → save snapshot
-	// Subsequent: snapshot boot
-	proc, err := p.emuCtrl.Boot(ctx, avdName, bootOpts)
-	if err != nil {
-		p.portAlloc.Release(ports)
-		p.removeInstance(id)
-		return nil, fmt.Errorf("boot emulator %s: %w", avdName, err)
-	}
-	inst.Process = proc
-
-	// Wait for boot and save clean snapshot
-	bootTimeout := time.Duration(profile.BootTimeoutSeconds) * time.Second
-	if bootTimeout == 0 {
-		bootTimeout = 120 * time.Second
-	}
-
-	if err := p.emuCtrl.SaveCleanSnapshot(ctx, p.adb, inst.Serial, bootTimeout); err != nil {
-		log.Warn().Err(err).Str("instance", id).Msg("pool: failed to save clean snapshot (continuing)")
-	}
-
-	// Transition to warm
+	// Warm
 	if err := inst.TransitionTo(StateWarm); err != nil {
 		return nil, err
 	}
@@ -353,99 +333,85 @@ func (p *Pool) bootExisting(ctx context.Context, avdName string, profileName str
 	inst.TouchActivity()
 
 	log.Info().
-		Str("instance", id).
-		Str("serial", inst.Serial).
-		Str("profile", profileName).
-		Msg("pool: emulator warm and ready")
+		Str("instance", inst.ID).
+		Str("device", dev.DisplayName()).
+		Str("serial", dev.Serial()).
+		Msg("pool: device warm and ready")
 
 	p.notifyReady()
-
-	// Watch process — detect death immediately
-	go p.watchProcess(inst)
+	go p.watchDevice(inst)
 
 	return inst, nil
 }
 
-// watchProcess polls an emulator process and removes it from the pool if it dies.
-func (p *Pool) watchProcess(inst *EmulatorInstance) {
-	if inst.Process == nil {
+// adoptDevice adds a discovered device (e.g., USB) to the pool.
+func (p *Pool) adoptDevice(ctx context.Context, dev Device) {
+	// Check if already tracked
+	p.mu.RLock()
+	for _, inst := range p.instances {
+		if inst.Device != nil && inst.Device.Serial() == dev.Serial() {
+			p.mu.RUnlock()
+			return
+		}
+	}
+	p.mu.RUnlock()
+
+	// Prepare (verify online, read model name, etc.)
+	if err := dev.Prepare(ctx); err != nil {
+		log.Debug().Err(err).Str("serial", dev.Serial()).Msg("pool: skipping device (not ready)")
 		return
 	}
 
-	ticker := time.NewTicker(3 * time.Second)
-	defer ticker.Stop()
+	inst := p.createInstance(dev, "")
 
-	for range ticker.C {
-		state := inst.GetState()
-		// Stop watching if we're shutting down this instance ourselves
-		if state == StateDestroying {
-			return
-		}
-
-		if !p.emuCtrl.IsRunning(inst.Process) {
-			// Double check it's still in our pool
-			p.mu.RLock()
-			_, exists := p.instances[inst.ID]
-			p.mu.RUnlock()
-			if !exists {
-				return // Already removed
-			}
-
-			// If it's being reset/destroyed by us, don't interfere
-			state = inst.GetState()
-			if state == StateDestroying || state == StateResetting {
-				return
-			}
-
-			log.Warn().
-				Str("instance", inst.ID).
-				Str("avd", inst.AVDName).
-				Str("previous_state", state.String()).
-				Msg("pool: emulator process exited unexpectedly")
-
-			p.portAlloc.Release(inst.Ports)
-			p.removeInstance(inst.ID)
-			return
-		}
+	// USB devices skip boot — go straight to warm
+	if err := inst.TransitionTo(StateWarm); err != nil {
+		p.removeInstance(inst.ID)
+		return
 	}
+	inst.RecordHealthCheck(true)
+	inst.TouchActivity()
+
+	log.Info().
+		Str("instance", inst.ID).
+		Str("device", dev.DisplayName()).
+		Str("kind", string(dev.Kind())).
+		Msg("pool: discovered device added to pool")
+
+	p.notifyReady()
 }
 
-// resetInstance resets an emulator to clean state after a session.
-// Tries snapshot restore first (fast ~5s), falls back to reboot.
-func (p *Pool) resetInstance(ctx context.Context, inst *EmulatorInstance) error {
-	log.Info().Str("instance", inst.ID).Str("avd", inst.AVDName).Msg("pool: resetting emulator")
-
-	// Try snapshot restore (only works if we saved one during boot)
-	err := p.emuCtrl.SnapshotLoad(ctx, p.adb, inst.Serial, "drizz_clean")
-	if err == nil {
-		return nil
+// createInstance creates a DeviceInstance, registers it, and returns it.
+func (p *Pool) createInstance(dev Device, profileName string) *DeviceInstance {
+	id := uuid.New().String()[:8]
+	inst := &DeviceInstance{
+		ID:          id,
+		ProfileName: profileName,
+		State:       StateCreating,
+		CreatedAt:   time.Now(),
+		Device:      dev,
 	}
 
-	// Snapshot failed — fall back to clearing user-installed apps
-	log.Warn().Err(err).Str("instance", inst.ID).Msg("pool: snapshot restore failed, clearing apps instead")
-	packages, listErr := p.adb.ListThirdPartyPackages(ctx, inst.Serial)
-	if listErr == nil {
-		for _, pkg := range packages {
-			_ = p.adb.Uninstall(ctx, inst.Serial, pkg)
-		}
-	}
-	return nil
+	p.mu.Lock()
+	p.instances[id] = inst
+	p.mu.Unlock()
+
+	return inst
 }
 
-// destroyInstance kills the emulator and cleans up.
-func (p *Pool) destroyInstance(inst *EmulatorInstance) error {
+// --- Lifecycle ---
+
+func (p *Pool) destroyInstance(ctx context.Context, inst *DeviceInstance) error {
 	_ = inst.TransitionTo(StateDestroying)
 
-	if inst.Process != nil {
-		if err := p.emuCtrl.Kill(inst.Process); err != nil {
-			log.Error().Err(err).Str("instance", inst.ID).Msg("pool: failed to kill emulator")
+	if inst.Device != nil {
+		if err := inst.Device.Shutdown(ctx); err != nil {
+			log.Error().Err(err).Str("instance", inst.ID).Msg("pool: shutdown failed")
 		}
 	}
 
-	p.portAlloc.Release(inst.Ports)
 	p.removeInstance(inst.ID)
-
-	log.Info().Str("instance", inst.ID).Str("avd", inst.AVDName).Msg("pool: instance destroyed")
+	log.Info().Str("instance", inst.ID).Msg("pool: instance destroyed")
 	return nil
 }
 
@@ -455,7 +421,52 @@ func (p *Pool) removeInstance(id string) {
 	delete(p.instances, id)
 }
 
-// maintenanceLoop runs periodic pool maintenance.
+// --- Device Watching ---
+
+// watchDevice polls a device and removes it from the pool if it dies.
+func (p *Pool) watchDevice(inst *DeviceInstance) {
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		state := inst.GetState()
+		if state == StateDestroying {
+			return
+		}
+
+		// Check health
+		if inst.Device != nil {
+			if err := inst.Device.HealthCheck(context.Background()); err != nil {
+				p.mu.RLock()
+				_, exists := p.instances[inst.ID]
+				p.mu.RUnlock()
+				if !exists {
+					return
+				}
+
+				state = inst.GetState()
+				if state == StateDestroying || state == StateResetting {
+					return
+				}
+
+				inst.RecordHealthCheck(false)
+				if inst.HealthFails >= p.cfg.HealthCheck.UnhealthyThreshold {
+					log.Warn().
+						Str("instance", inst.ID).
+						Str("device", inst.Device.DisplayName()).
+						Msg("pool: device unhealthy, removing")
+					_ = p.destroyInstance(context.Background(), inst)
+					return
+				}
+			} else {
+				inst.RecordHealthCheck(true)
+			}
+		}
+	}
+}
+
+// --- Maintenance ---
+
 func (p *Pool) maintenanceLoop(ctx context.Context) {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
@@ -470,33 +481,26 @@ func (p *Pool) maintenanceLoop(ctx context.Context) {
 	}
 }
 
-// runMaintenance checks process liveness, handles errors, and replenishes pool.
 func (p *Pool) runMaintenance(ctx context.Context) {
-	// 1. Check process liveness — detect manually killed emulators
-	p.mu.RLock()
-	var dead []*EmulatorInstance
-	for _, inst := range p.instances {
-		state := inst.GetState()
-		if state == StateWarm || state == StateAllocated {
-			if !p.emuCtrl.IsRunning(inst.Process) {
-				dead = append(dead, inst)
-			}
+	// 1. Scan for USB devices
+	for _, scanner := range p.scanners {
+		devices, err := scanner.Scan(ctx)
+		if err != nil {
+			continue
 		}
-	}
-	p.mu.RUnlock()
 
-	for _, inst := range dead {
-		log.Warn().
-			Str("instance", inst.ID).
-			Str("avd", inst.AVDName).
-			Msg("pool: emulator process died, removing from pool")
-		p.portAlloc.Release(inst.Ports)
-		p.removeInstance(inst.ID)
+		// Adopt new devices
+		for _, dev := range devices {
+			p.adoptDevice(ctx, dev)
+		}
+
+		// Prune disconnected USB devices
+		p.pruneDisconnected(ctx, devices)
 	}
 
 	// 2. Handle errored instances
 	p.mu.RLock()
-	var errored []*EmulatorInstance
+	var errored []*DeviceInstance
 	for _, inst := range p.instances {
 		if inst.GetState() == StateError {
 			errored = append(errored, inst)
@@ -506,19 +510,17 @@ func (p *Pool) runMaintenance(ctx context.Context) {
 
 	for _, inst := range errored {
 		log.Warn().Str("instance", inst.ID).Msg("pool: destroying errored instance")
-		_ = p.destroyInstance(inst)
+		_ = p.destroyInstance(ctx, inst)
 	}
 
-	// 3. Idle timeout — shut down emulators with no activity
+	// 3. Idle timeout — shut down idle devices that can be destroyed
 	idleTimeout := time.Duration(p.cfg.Cleanup.IdleTimeoutMinutes) * time.Minute
 	if idleTimeout > 0 {
 		p.mu.RLock()
-		var idle []*EmulatorInstance
+		var idle []*DeviceInstance
 		for _, inst := range p.instances {
 			state := inst.GetState()
-			// Only idle-shutdown warm (unused) emulators
-			// Allocated ones have active sessions — the broker handles session timeout
-			if state == StateWarm && inst.IdleSince() > idleTimeout {
+			if state == StateWarm && inst.Device != nil && inst.Device.CanDestroy() && inst.IdleSince() > idleTimeout {
 				idle = append(idle, inst)
 			}
 		}
@@ -527,14 +529,45 @@ func (p *Pool) runMaintenance(ctx context.Context) {
 		for _, inst := range idle {
 			log.Info().
 				Str("instance", inst.ID).
-				Str("avd", inst.AVDName).
+				Str("device", inst.Device.DisplayName()).
 				Dur("idle", inst.IdleSince()).
-				Dur("timeout", idleTimeout).
-				Msg("pool: shutting down idle emulator")
-			_ = p.destroyInstance(inst)
+				Msg("pool: shutting down idle device")
+			_ = p.destroyInstance(ctx, inst)
 		}
 	}
 }
+
+// pruneDisconnected removes USB devices that are no longer physically connected.
+func (p *Pool) pruneDisconnected(ctx context.Context, currentDevices []Device) {
+	// Build set of currently connected serials
+	connected := make(map[string]bool)
+	for _, dev := range currentDevices {
+		connected[dev.Serial()] = true
+	}
+
+	p.mu.RLock()
+	var disconnected []*DeviceInstance
+	for _, inst := range p.instances {
+		if inst.Device == nil {
+			continue
+		}
+		// Only prune non-destroyable devices (USB) — emulators are handled by watchDevice
+		if !inst.Device.CanDestroy() && !connected[inst.Device.Serial()] {
+			disconnected = append(disconnected, inst)
+		}
+	}
+	p.mu.RUnlock()
+
+	for _, inst := range disconnected {
+		log.Warn().
+			Str("instance", inst.ID).
+			Str("device", inst.Device.DisplayName()).
+			Msg("pool: device disconnected, removing from pool")
+		p.removeInstance(inst.ID)
+	}
+}
+
+// --- Helpers ---
 
 func (p *Pool) totalInstances() int {
 	p.mu.RLock()
@@ -542,20 +575,21 @@ func (p *Pool) totalInstances() int {
 	return len(p.instances)
 }
 
-// findUnbootedAVD finds an existing AVD on disk that isn't currently in the pool.
-func (p *Pool) findUnbootedAVD(ctx context.Context, profileName string) (string, error) {
+func (p *Pool) findUnbootedAVD(ctx context.Context) (string, error) {
 	allAVDs, err := p.avdMgr.List(ctx)
 	if err != nil {
 		return "", err
 	}
 
-	// Build set of AVDs already in pool
 	booted := make(map[string]bool)
+	p.mu.RLock()
 	for _, inst := range p.instances {
-		booted[inst.AVDName] = true
+		if inst.Device != nil {
+			booted[inst.Device.DisplayName()] = true
+		}
 	}
+	p.mu.RUnlock()
 
-	// Find first available AVD not in pool
 	for _, avd := range allAVDs {
 		if !booted[avd.Name] {
 			return avd.Name, nil
@@ -564,17 +598,13 @@ func (p *Pool) findUnbootedAVD(ctx context.Context, profileName string) (string,
 	return "", nil
 }
 
-// guessProfileForAVD tries to match an AVD name to a configured profile.
-// Falls back to the first configured profile if no match found.
 func guessProfileForAVD(avdName string, cfg *config.Config) string {
-	// Check if AVD name matches any warmup profile pattern (drizz_<profile>_N)
 	for profileName := range cfg.Pool.Profiles.Android {
 		prefix := "drizz_" + profileName + "_"
 		if len(avdName) > len(prefix) && avdName[:len(prefix)] == prefix {
 			return profileName
 		}
 	}
-	// Fallback: return first profile (for user-created AVDs like Pixel_8_API_34-ext8)
 	for profileName := range cfg.Pool.Profiles.Android {
 		return profileName
 	}

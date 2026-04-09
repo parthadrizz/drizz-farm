@@ -19,7 +19,7 @@ import (
 	"github.com/drizz-dev/drizz-farm/internal/pool"
 )
 
-func toDisplayState(s pool.EmulatorState) string {
+func toDisplayState(s pool.DeviceState) string {
 	switch s {
 	case pool.StateCreating:
 		return "CREATING"
@@ -135,7 +135,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 				var status pool.PoolStatus
 				if json.Unmarshal(body, &status) == nil {
 					for _, inst := range status.Instances {
-						poolByAVD[inst.AVDName] = inst
+						poolByAVD[inst.DeviceName] = inst
 					}
 				}
 			}
@@ -154,7 +154,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 				line := fmt.Sprintf("    %s %-35s %s", icon, avd.Name, displayState)
 
 				if displayState == "ONLINE" {
-					line += fmt.Sprintf("  %s  port:%d", inst.Serial, inst.ADBPort)
+					line += fmt.Sprintf("  %s  port:%d", inst.Serial, inst.Connection.ADBPort)
 					if inst.SessionID != "" {
 						line += fmt.Sprintf("  session:%s", inst.SessionID)
 					}
