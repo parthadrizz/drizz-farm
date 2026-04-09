@@ -29,6 +29,7 @@ func RegisterRoutes(r chi.Router, cfg *config.Config, p *pool.Pool, b *session.B
 		pool: p,
 		adb:  android.NewADBClient(deps.SDK, deps.Runner),
 	}
+	recH := newRecordingHandlers(p, android.NewADBClient(deps.SDK, deps.Runner), deps.SDK, cfg.DataDir())
 	cfgH := &configHandlers{cfg: cfg}
 	histH := &historyHandlers{store: deps.Store}
 	snapH := &snapshotHandlers{
@@ -71,6 +72,17 @@ func RegisterRoutes(r chi.Router, cfg *config.Config, p *pool.Pool, b *session.B
 		r.Post("/sessions/{id}/install", devH.InstallAPK)
 		r.Post("/sessions/{id}/deeplink", devH.OpenDeeplink)
 		r.Post("/sessions/{id}/adb", devH.ExecADB)
+
+		// Recording + Artifacts
+		r.Post("/sessions/{id}/recording/start", recH.Start)
+		r.Post("/sessions/{id}/recording/stop", recH.Stop)
+		r.Get("/sessions/{id}/recording/download", recH.Download)
+		r.Get("/sessions/{id}/recordings", recH.List)
+		r.Post("/sessions/{id}/screenshot", recH.Screenshot)
+		r.Get("/sessions/{id}/logcat/download", recH.GetLogcat)
+		r.Post("/sessions/{id}/har/start", recH.StartHAR)
+		r.Post("/sessions/{id}/har/stop", recH.StopHAR)
+		r.Get("/sessions/{id}/har/download", recH.DownloadHAR)
 
 		// Snapshots
 		r.Post("/sessions/{id}/snapshot/save", snapH.Save)

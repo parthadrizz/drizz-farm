@@ -102,6 +102,8 @@ export function LiveView() {
   const [activeRotation, setActiveRotation] = useState(0);
   const [activeDark, setActiveDark] = useState<boolean | null>(null);
   const [activeLocale, setActiveLocale] = useState('');
+  const [recording, setRecording] = useState(false);
+  const [harCapturing, setHarCapturing] = useState(false);
 
   return (
     <div className="flex gap-4">
@@ -229,6 +231,47 @@ export function LiveView() {
               onKeyDown={e => { if (e.key === 'Enter' && id) api.openDeeplink(id, (e.target as HTMLInputElement).value); }} />
           </div>
         </Panel>
+
+        {/* Recording + HAR + Screenshot */}
+        <div className="grid grid-cols-3 gap-3">
+          <Panel title="Video">
+            {!recording ? (
+              <button onClick={async () => { if (id) { await api.startRecording(id); setRecording(true); } }}
+                className="w-full px-2 py-1.5 bg-red-500/20 text-red-400 rounded text-[10px] hover:bg-red-500/30 transition">
+                ● Record
+              </button>
+            ) : (
+              <button onClick={async () => { if (id) { await api.stopRecording(id); setRecording(false); } }}
+                className="w-full px-2 py-1.5 bg-red-500 text-white rounded text-[10px] animate-pulse">
+                ■ Stop
+              </button>
+            )}
+          </Panel>
+          <Panel title="Network">
+            {!harCapturing ? (
+              <button onClick={async () => { if (id) { await api.startHAR(id); setHarCapturing(true); } }}
+                className="w-full px-2 py-1.5 bg-blue-500/20 text-blue-400 rounded text-[10px] hover:bg-blue-500/30 transition">
+                Capture
+              </button>
+            ) : (
+              <button onClick={async () => { if (id) { await api.stopHAR(id); setHarCapturing(false); } }}
+                className="w-full px-2 py-1.5 bg-blue-500 text-white rounded text-[10px] animate-pulse">
+                ■ Stop
+              </button>
+            )}
+          </Panel>
+          <Panel title="Screenshot">
+            <button onClick={async () => {
+              if (!id) return;
+              const blob = await api.takeScreenshot(id);
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a'); a.href = url; a.download = `screenshot_${Date.now()}.png`; a.click();
+              URL.revokeObjectURL(url);
+            }} className="w-full px-2 py-1.5 bg-gray-700 text-gray-300 rounded text-[10px] hover:bg-gray-600 transition">
+              Capture
+            </button>
+          </Panel>
+        </div>
 
         {/* ADB Shell */}
         <Panel title="ADB Shell">

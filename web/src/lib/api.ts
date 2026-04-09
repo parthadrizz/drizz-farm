@@ -111,6 +111,14 @@ export const api = {
   openDeeplink: (id: string, url: string) => fetchJSON<any>(`/sessions/${id}/deeplink`, { method: 'POST', body: JSON.stringify({ url }) }),
   execADB: (id: string, command: string) => fetchJSON<any>(`/sessions/${id}/adb`, { method: 'POST', body: JSON.stringify({ command }) }),
 
+  // Recording + Artifacts
+  startRecording: (id: string) => fetchJSON<any>(`/sessions/${id}/recording/start`, { method: 'POST' }),
+  stopRecording: (id: string) => fetchJSON<any>(`/sessions/${id}/recording/stop`, { method: 'POST' }),
+  listRecordings: (id: string) => fetchJSON<any>(`/sessions/${id}/recordings`),
+  takeScreenshot: (id: string) => fetch(`${BASE}/sessions/${id}/screenshot`, { method: 'POST' }).then(r => r.blob()),
+  startHAR: (id: string) => fetchJSON<any>(`/sessions/${id}/har/start`, { method: 'POST' }),
+  stopHAR: (id: string) => fetchJSON<any>(`/sessions/${id}/har/stop`, { method: 'POST' }),
+
   // Discovery
   systemImages: () => fetchJSON<{ images: SystemImage[] }>('/discovery/system-images'),
   availableImages: () => fetchJSON<{ images: SystemImage[] }>('/discovery/available-images'),
