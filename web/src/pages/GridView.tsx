@@ -28,8 +28,8 @@ export function GridView() {
     );
   }
 
-  // Always minimum 2x2 grid so it looks like a proper device lab
-  const cols = liveInstances.length <= 8 ? 2 : liveInstances.length <= 12 ? 3 : 4;
+  // 3-4 columns so tiles stay compact
+  const cols = liveInstances.length <= 3 ? 3 : liveInstances.length <= 8 ? 4 : 5;
 
   return (
     <div className="space-y-4">
@@ -80,7 +80,7 @@ function StreamTile({ instance, onClick }: { instance: DeviceInstance; onClick: 
 
   return (
     <div onClick={onClick}
-      className="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden cursor-pointer hover:border-emerald-400/50 transition group">
+      className="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden cursor-pointer hover:border-emerald-400/50 transition group max-w-[200px]">
       <div className="relative">
         {!connected ? (
           <div className="aspect-[9/16] flex items-center justify-center bg-gray-950">
