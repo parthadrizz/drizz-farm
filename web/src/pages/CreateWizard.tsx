@@ -12,26 +12,43 @@ export function CreateWizard() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
 
+  const [availableImages, setAvailableImages] = useState<SystemImage[]>([]);
   const [selectedDevice, setSelectedDevice] = useState<DeviceDef | null>(null);
   const [selectedImage, setSelectedImage] = useState<SystemImage | null>(null);
   const [count, setCount] = useState(3);
   const [profileName, setProfileName] = useState('');
   const [activeCategory, setActiveCategory] = useState('phone');
+  const [installing, setInstalling] = useState<string | null>(null);
+  const [showAll, setShowAll] = useState(false);
 
   const [createResult, setCreateResult] = useState<{ created: number; errors: string[] } | null>(null);
 
   useEffect(() => {
-    (async () => {
-      try {
-        const [i, d, a] = await Promise.all([api.systemImages(), api.devices(), api.avds()]);
-        setImages(i.images || []);
-        setDeviceDefs(enrichDevices(d.devices || []));
-        setAvds((a.avds || []).map(x => x.name));
-        setError('');
-      } catch (e: any) { setError(e.message); }
-      setLoading(false);
-    })();
+    loadData();
   }, []);
+
+  const loadData = async () => {
+    try {
+      const [i, ai, d, a] = await Promise.all([
+        api.systemImages(), api.availableImages(), api.devices(), api.avds()
+      ]);
+      setImages(i.images || []);
+      setAvailableImages(ai.images || []);
+      setDeviceDefs(enrichDevices(d.devices || []));
+      setAvds((a.avds || []).map(x => x.name));
+      setError('');
+    } catch (e: any) { setError(e.message); }
+    setLoading(false);
+  };
+
+  const handleInstall = async (path: string) => {
+    setInstalling(path);
+    try {
+      await api.installImage(path);
+      await loadData(); // Refresh lists
+    } catch (e: any) { alert(e.message); }
+    setInstalling(null);
+  };
 
   const handleCreate = async () => {
     if (!selectedImage || !selectedDevice) return;
@@ -125,65 +142,109 @@ export function CreateWizard() {
         </div>
       )}
 
-      {/* Step 2: Choose System Image */}
-      {step === 'image' && (
-        <div className="space-y-4">
-          <div className="flex items-center gap-3 mb-4">
-            <button onClick={() => setStep('device')} className="text-sm text-gray-500 hover:text-gray-300">← Back</button>
-            <div className="text-sm text-gray-400">
-              Device: <span className="text-emerald-400">{selectedDevice?.name}</span>
-              {selectedDevice?.screen && <span className="text-gray-600"> · {selectedDevice.screen}</span>}
+      {/* Step 2: Choose System Image — table like Android Studio */}
+      {step === 'image' && (() => {
+        const installedPaths = new Set(images.map(i => i.path));
+        // Filter available to only show not-installed, and recent APIs (21+)
+        const notInstalled = availableImages.filter(i => !installedPaths.has(i.path));
+        // Group by API level for display
+        const apiLevel = (name: string) => {
+          const m = name.match(/android-(\d+)/);
+          return m ? parseInt(m[1]) : 0;
+        };
+        const recentNotInstalled = notInstalled
+          .filter(i => apiLevel(i.api_name) >= 28)
+          .sort((a, b) => apiLevel(b.api_name) - apiLevel(a.api_name));
+
+        return (
+          <div className="space-y-4">
+            <div className="flex items-center gap-3 mb-2">
+              <button onClick={() => setStep('device')} className="text-sm text-gray-500 hover:text-gray-300">← Back</button>
+              <div className="text-sm text-gray-400">
+                Device: <span className="text-emerald-400">{selectedDevice?.name}</span>
+                {selectedDevice?.screen && <span className="text-gray-600"> · {selectedDevice.screen}</span>}
+              </div>
+            </div>
+
+            <h2 className="text-lg font-semibold">System Image</h2>
+
+            {/* Table */}
+            <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-800 text-gray-500 text-xs uppercase tracking-wider">
+                    <th className="text-left px-4 py-2.5 font-medium">API Level</th>
+                    <th className="text-left px-4 py-2.5 font-medium">Target</th>
+                    <th className="text-left px-4 py-2.5 font-medium">Arch</th>
+                    <th className="text-right px-4 py-2.5 font-medium">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-800/50">
+                  {/* Installed images first */}
+                  {images.map(img => (
+                    <tr key={img.path}
+                      onClick={() => {
+                        setSelectedImage(img);
+                        let name = img.api_name.replace('android-', 'api').replace(/-/g, '_');
+                        if (img.variant.includes('playstore')) name += '_play';
+                        setProfileName(name);
+                        setStep('configure');
+                      }}
+                      className={`cursor-pointer transition hover:bg-gray-800/50 ${
+                        selectedImage?.path === img.path ? 'bg-emerald-400/5' : ''
+                      }`}>
+                      <td className="px-4 py-3 font-medium text-gray-200">
+                        API {img.api_name.replace('android-', '')}
+                      </td>
+                      <td className="px-4 py-3 text-gray-400">
+                        {img.variant.replace(/_/g, ' ')}
+                        {img.variant.includes('playstore') && (
+                          <span className="ml-2 text-[10px] bg-blue-400/10 text-blue-400 px-1.5 py-0.5 rounded">Play Store</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-gray-500 font-mono text-xs">{img.arch}</td>
+                      <td className="px-4 py-3 text-right">
+                        <span className="text-xs bg-emerald-400/10 text-emerald-400 px-2 py-0.5 rounded">Installed</span>
+                      </td>
+                    </tr>
+                  ))}
+
+                  {/* Available (not installed) */}
+                  {(showAll ? recentNotInstalled : recentNotInstalled.slice(0, 5)).map(img => (
+                    <tr key={img.path} className="text-gray-500">
+                      <td className="px-4 py-3">API {img.api_name.replace('android-', '')}</td>
+                      <td className="px-4 py-3 text-gray-600">
+                        {img.variant.replace(/_/g, ' ')}
+                        {img.variant.includes('playstore') && (
+                          <span className="ml-2 text-[10px] bg-blue-400/10 text-blue-300/50 px-1.5 py-0.5 rounded">Play Store</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 font-mono text-xs text-gray-600">{img.arch}</td>
+                      <td className="px-4 py-3 text-right">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleInstall(img.path); }}
+                          disabled={installing === img.path}
+                          className="text-xs px-2.5 py-1 bg-blue-500/10 text-blue-400 rounded hover:bg-blue-500/20 transition disabled:opacity-50">
+                          {installing === img.path ? 'Installing...' : 'Download'}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              {/* Show more / less */}
+              {recentNotInstalled.length > 5 && (
+                <div className="border-t border-gray-800 px-4 py-2 text-center">
+                  <button onClick={() => setShowAll(!showAll)} className="text-xs text-gray-500 hover:text-gray-300 transition">
+                    {showAll ? 'Show less' : `Show all ${recentNotInstalled.length} available images`}
+                  </button>
+                </div>
+              )}
             </div>
           </div>
-
-          <h2 className="text-lg font-semibold">Select System Image</h2>
-
-          {images.length === 0 ? (
-            <div className="bg-gray-900 border border-gray-800 rounded-lg p-8 text-center">
-              <div className="text-gray-400 mb-2">No system images installed</div>
-              <div className="text-gray-600 text-sm">
-                Run: <code className="bg-gray-800 px-2 py-0.5 rounded">sdkmanager --install 'system-images;android-35;google_apis;arm64-v8a'</code>
-              </div>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {/* Recommended section */}
-              <div className="text-xs text-gray-500 uppercase tracking-wider">Installed</div>
-              {images.map(img => (
-                <button key={img.path} onClick={() => {
-                  setSelectedImage(img);
-                  let name = img.api_name.replace('android-', 'api').replace(/-/g, '_');
-                  if (img.variant.includes('playstore')) name += '_play';
-                  setProfileName(name);
-                  setStep('configure');
-                }}
-                  className={`w-full text-left p-4 rounded-lg border transition hover:border-emerald-400/50 ${
-                    selectedImage?.path === img.path ? 'border-emerald-400 bg-emerald-400/5' : 'border-gray-800 bg-gray-900'
-                  }`}>
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="font-medium text-gray-200">API {img.api_name.replace('android-', '')}</div>
-                      <div className="text-sm text-gray-500 mt-0.5">{img.variant} · {img.arch}</div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {img.variant.includes('playstore') && (
-                        <span className="text-xs bg-blue-400/10 text-blue-400 px-2 py-0.5 rounded">Play Store</span>
-                      )}
-                      <span className="text-xs bg-emerald-400/10 text-emerald-400 px-2 py-0.5 rounded">Installed</span>
-                    </div>
-                  </div>
-                  <div className="text-xs text-gray-600 mt-2 font-mono">{img.path}</div>
-                </button>
-              ))}
-
-              {/* Download more hint */}
-              <div className="text-center py-4 text-gray-600 text-sm">
-                Need more? <code className="bg-gray-800 px-2 py-0.5 rounded text-gray-400">sdkmanager --list | grep system-images</code>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
+        );
+      })()}
 
       {/* Step 3: Configure */}
       {step === 'configure' && (

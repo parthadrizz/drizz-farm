@@ -51,6 +51,8 @@ func RegisterRoutes(r chi.Router, cfg *config.Config, p *pool.Pool, b *session.B
 		// Discovery (for Create Wizard)
 		r.Route("/discovery", func(r chi.Router) {
 			r.Get("/system-images", discH.SystemImages)
+			r.Get("/available-images", discH.AvailableImages)
+			r.Post("/install-image", discH.InstallImage)
 			r.Get("/devices", discH.Devices)
 			r.Get("/avds", discH.AVDs)
 			r.Post("/create-avds", discH.CreateAVDs)

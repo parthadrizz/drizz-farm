@@ -144,6 +144,48 @@ func (s *SDK) ListInstalledSystemImages(ctx context.Context, runner CommandRunne
 	return images, nil
 }
 
+// ListAvailableSystemImages queries sdkmanager for all downloadable arm64 system images.
+func (s *SDK) ListAvailableSystemImages(ctx context.Context, runner CommandRunner) ([]InstalledSystemImage, error) {
+	out, err := runner.Run(ctx, s.SDKManagerPath(), "--list")
+	if err != nil {
+		return nil, fmt.Errorf("sdkmanager --list: %w", err)
+	}
+
+	var images []InstalledSystemImage
+	seen := make(map[string]bool)
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "system-images;") {
+			continue
+		}
+		// Extract package path (first column before |)
+		parts := strings.SplitN(line, "|", 2)
+		pkgPath := strings.TrimSpace(parts[0])
+
+		if seen[pkgPath] {
+			continue
+		}
+		seen[pkgPath] = true
+
+		segments := splitSemicolon(pkgPath)
+		if len(segments) != 4 {
+			continue
+		}
+		// Only arm64
+		if segments[3] != "arm64-v8a" {
+			continue
+		}
+		images = append(images, InstalledSystemImage{
+			Path:    pkgPath,
+			APIName: segments[1],
+			Variant: segments[2],
+			Arch:    segments[3],
+		})
+	}
+
+	return images, nil
+}
+
 // ListInstalledDevices queries avdmanager for available device definitions.
 func (s *SDK) ListInstalledDevices(ctx context.Context, runner CommandRunner) ([]string, error) {
 	out, err := runner.Run(ctx, s.AVDManagerPath(), "list", "device", "-c")

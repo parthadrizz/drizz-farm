@@ -71,6 +71,54 @@ func (h *discoveryHandlers) AVDs(w http.ResponseWriter, r *http.Request) {
 	JSON(w, http.StatusOK, map[string]any{"avds": resp})
 }
 
+// AvailableImages handles GET /api/v1/discovery/available-images
+func (h *discoveryHandlers) AvailableImages(w http.ResponseWriter, r *http.Request) {
+	images, err := h.sdk.ListAvailableSystemImages(r.Context(), h.runner)
+	if err != nil {
+		Error(w, fmt.Errorf("list available images: %w", err))
+		return
+	}
+
+	resp := make([]systemImageResponse, 0, len(images))
+	for _, img := range images {
+		resp = append(resp, systemImageResponse{
+			Path:    img.Path,
+			APIName: img.APIName,
+			Variant: img.Variant,
+			Arch:    img.Arch,
+		})
+	}
+	JSON(w, http.StatusOK, map[string]any{"images": resp})
+}
+
+// InstallImage handles POST /api/v1/discovery/install-image
+func (h *discoveryHandlers) InstallImage(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Path == "" {
+		JSON(w, http.StatusBadRequest, ErrorResponse{
+			Error: "invalid_request", Message: "path is required", Code: 400,
+		})
+		return
+	}
+
+	// Run sdkmanager --install in background
+	// For now, run synchronously (can be slow ~1-5 min)
+	_, err := h.runner.Run(r.Context(), h.sdk.SDKManagerPath(), "--install", req.Path)
+	if err != nil {
+		JSON(w, http.StatusInternalServerError, ErrorResponse{
+			Error: "install_failed", Message: fmt.Sprintf("Failed to install %s: %v", req.Path, err), Code: 500,
+		})
+		return
+	}
+
+	JSON(w, http.StatusOK, map[string]any{
+		"status":  "installed",
+		"path":    req.Path,
+	})
+}
+
 type createAVDsRequest struct {
 	ProfileName string `json:"profile_name"`
 	Device      string `json:"device"`

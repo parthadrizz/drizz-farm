@@ -103,6 +103,8 @@ export const api = {
 
   // Discovery
   systemImages: () => fetchJSON<{ images: SystemImage[] }>('/discovery/system-images'),
+  availableImages: () => fetchJSON<{ images: SystemImage[] }>('/discovery/available-images'),
+  installImage: (path: string) => fetchJSON<{ status: string }>('/discovery/install-image', { method: 'POST', body: JSON.stringify({ path }) }),
   devices: () => fetchJSON<{ devices: string[] }>('/discovery/devices'),
   avds: () => fetchJSON<{ avds: { name: string }[] }>('/discovery/avds'),
   createAVDs: (data: { profile_name: string; device: string; system_image: string; count: number }) =>
