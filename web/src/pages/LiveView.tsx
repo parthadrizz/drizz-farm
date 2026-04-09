@@ -96,6 +96,12 @@ export function LiveView() {
 
   const [adbCmd, setAdbCmd] = useState('');
   const [adbOutput, setAdbOutput] = useState('');
+  const [activeGPS, setActiveGPS] = useState('');
+  const [activeNetwork, setActiveNetwork] = useState('');
+  const [activeBattery, setActiveBattery] = useState(0);
+  const [activeRotation, setActiveRotation] = useState(0);
+  const [activeDark, setActiveDark] = useState<boolean | null>(null);
+  const [activeLocale, setActiveLocale] = useState('');
 
   return (
     <div className="flex gap-4">
@@ -128,7 +134,7 @@ export function LiveView() {
       <div className="flex-1 space-y-3 overflow-y-auto max-h-[600px]">
         {/* GPS */}
         <Panel title="GPS">
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
             {[
               { label: 'San Francisco', lat: 37.7749, lng: -122.4194 },
               { label: 'New York', lat: 40.7128, lng: -74.006 },
@@ -137,8 +143,7 @@ export function LiveView() {
               { label: 'Mumbai', lat: 19.076, lng: 72.8777 },
               { label: 'Bangalore', lat: 12.9716, lng: 77.5946 },
             ].map(loc => (
-              <button key={loc.label} onClick={() => id && api.setGPS(id, loc.lat, loc.lng)}
-                className="px-2 py-1 bg-gray-800 rounded text-[10px] hover:bg-gray-700 transition">{loc.label}</button>
+              <Chip key={loc.label} active={activeGPS === loc.label} onClick={() => { if (id) { api.setGPS(id, loc.lat, loc.lng); setActiveGPS(loc.label); } }}>{loc.label}</Chip>
             ))}
           </div>
         </Panel>
@@ -147,8 +152,7 @@ export function LiveView() {
         <Panel title="Network">
           <div className="flex gap-2 flex-wrap">
             {['2g', '3g', '4g', '5g', 'wifi_slow', 'wifi_fast', 'offline'].map(p => (
-              <button key={p} onClick={() => id && api.setNetwork(id, p)}
-                className="px-2 py-1 bg-gray-800 rounded text-[10px] hover:bg-gray-700 transition">{p}</button>
+              <Chip key={p} active={activeNetwork === p} onClick={() => { if (id) { api.setNetwork(id, p); setActiveNetwork(p); } }}>{p}</Chip>
             ))}
           </div>
         </Panel>
@@ -157,8 +161,7 @@ export function LiveView() {
         <Panel title="Battery">
           <div className="flex gap-2 flex-wrap">
             {[100, 75, 50, 25, 10, 5].map(l => (
-              <button key={l} onClick={() => id && api.setBattery(id, l, l > 20 ? 'ac' : 'none')}
-                className="px-2 py-1 bg-gray-800 rounded text-[10px] hover:bg-gray-700">{l}%</button>
+              <Chip key={l} active={activeBattery === l} onClick={() => { if (id) { api.setBattery(id, l, l > 20 ? 'ac' : 'none'); setActiveBattery(l); } }}>{l}%</Chip>
             ))}
           </div>
         </Panel>
@@ -172,8 +175,7 @@ export function LiveView() {
               { label: 'Reverse', r: 2 },
               { label: 'Landscape →', r: 3 },
             ].map(o => (
-              <button key={o.r} onClick={() => id && api.setOrientation(id, o.r)}
-                className="px-2 py-1 bg-gray-800 rounded text-[10px] hover:bg-gray-700">{o.label}</button>
+              <Chip key={o.r} active={activeRotation === o.r} onClick={() => { if (id) { api.setOrientation(id, o.r); setActiveRotation(o.r); } }}>{o.label}</Chip>
             ))}
           </div>
         </Panel>
@@ -181,8 +183,8 @@ export function LiveView() {
         {/* Dark Mode */}
         <Panel title="Appearance">
           <div className="flex gap-2">
-            <button onClick={() => id && api.setDarkMode(id, true)} className="px-2 py-1 bg-gray-800 rounded text-[10px] hover:bg-gray-700">Dark</button>
-            <button onClick={() => id && api.setDarkMode(id, false)} className="px-2 py-1 bg-gray-800 rounded text-[10px] hover:bg-gray-700">Light</button>
+            <Chip active={activeDark === true} onClick={() => { if (id) { api.setDarkMode(id, true); setActiveDark(true); } }}>Dark</Chip>
+            <Chip active={activeDark === false} onClick={() => { if (id) { api.setDarkMode(id, false); setActiveDark(false); } }}>Light</Chip>
           </div>
         </Panel>
 
@@ -190,8 +192,7 @@ export function LiveView() {
         <Panel title="Locale">
           <div className="flex gap-2 flex-wrap">
             {['en-US', 'ja-JP', 'hi-IN', 'de-DE', 'fr-FR', 'zh-CN', 'ar-SA', 'ko-KR'].map(l => (
-              <button key={l} onClick={() => id && api.setLocale(id, l)}
-                className="px-2 py-1 bg-gray-800 rounded text-[10px] hover:bg-gray-700 font-mono">{l}</button>
+              <Chip key={l} active={activeLocale === l} mono onClick={() => { if (id) { api.setLocale(id, l); setActiveLocale(l); } }}>{l}</Chip>
             ))}
           </div>
         </Panel>
@@ -221,6 +222,19 @@ export function LiveView() {
         </Panel>
       </div>
     </div>
+  );
+}
+
+function Chip({ active, mono, onClick, children }: { active?: boolean; mono?: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button onClick={onClick}
+      className={`px-2 py-1 rounded text-[10px] transition ${mono ? 'font-mono' : ''} ${
+        active
+          ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/50'
+          : 'bg-gray-800 text-gray-300 border border-transparent hover:bg-gray-700'
+      }`}>
+      {children}
+    </button>
   );
 }
 
