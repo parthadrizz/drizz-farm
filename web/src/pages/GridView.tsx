@@ -28,8 +28,8 @@ export function GridView() {
     );
   }
 
-  // Calculate grid: 1→1x1, 2→2x1, 3-4→2x2, 5-6→3x2, 7-9→3x3, 10-16→4x4
-  const cols = liveInstances.length <= 1 ? 1 : liveInstances.length <= 4 ? 2 : liveInstances.length <= 9 ? 3 : 4;
+  // Always minimum 2x2 grid so it looks like a proper device lab
+  const cols = liveInstances.length <= 8 ? 2 : liveInstances.length <= 12 ? 3 : 4;
 
   return (
     <div className="space-y-4">
