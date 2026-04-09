@@ -18,6 +18,7 @@ type deviceHandlers struct {
 }
 
 func (h *deviceHandlers) findSerial(id string) string {
+	if h.pool == nil { return "" }
 	for _, inst := range h.pool.Status().Instances {
 		if inst.ID == id || inst.SessionID == id {
 			return inst.Serial

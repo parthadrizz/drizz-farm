@@ -108,6 +108,7 @@ func (h *snapshotHandlers) Delete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *snapshotHandlers) findSerial(id string) string {
+	if h.pool == nil { return "" }
 	status := h.pool.Status()
 	for _, inst := range status.Instances {
 		if inst.ID == id || inst.SessionID == id {

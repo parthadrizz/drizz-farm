@@ -46,6 +46,7 @@ func newRecordingHandlers(p *pool.Pool, adb *android.ADBClient, sdk *android.SDK
 }
 
 func (h *recordingHandlers) findSerial(id string) (string, string) {
+	if h.pool == nil { return "", "" }
 	for _, inst := range h.pool.Status().Instances {
 		if inst.ID == id || inst.SessionID == id {
 			return inst.Serial, inst.ID
