@@ -3,6 +3,8 @@ import { Dashboard } from './pages/Dashboard';
 import { CreateWizard } from './pages/CreateWizard';
 import { Sessions } from './pages/Sessions';
 import { Settings } from './pages/Settings';
+import { LiveView } from './pages/LiveView';
+import { GridView } from './pages/GridView';
 
 function App() {
   return (
@@ -18,6 +20,7 @@ function App() {
               {[
                 { to: '/', label: 'Dashboard', end: true },
                 { to: '/create', label: 'Create' },
+                { to: '/grid', label: 'Live Grid' },
                 { to: '/sessions', label: 'Sessions' },
                 { to: '/settings', label: 'Settings' },
               ].map(({ to, label, end }) => (
@@ -34,6 +37,8 @@ function App() {
             <Route path="/create" element={<CreateWizard />} />
             <Route path="/sessions" element={<Sessions />} />
             <Route path="/settings" element={<Settings />} />
+            <Route path="/grid" element={<GridView />} />
+            <Route path="/live/:id" element={<LiveView />} />
           </Routes>
         </main>
       </div>

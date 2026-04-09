@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { api, PoolStatus, NodeHealth, DeviceInstance } from '../lib/api';
 
 export function Dashboard() {
@@ -7,6 +8,7 @@ export function Dashboard() {
   const [avds, setAvds] = useState<string[]>([]);
   const [error, setError] = useState('');
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const navigate = useNavigate();
 
   const refresh = async () => {
     try {
@@ -111,6 +113,9 @@ export function Dashboard() {
                 <div className="flex gap-1.5">
                   {state === 'offline' && (
                     <ActionBtn onClick={() => handleBoot(avdName)} loading={isLoading} color="emerald">Start</ActionBtn>
+                  )}
+                  {(state === 'warm' || state === 'allocated') && inst && (
+                    <ActionBtn onClick={() => navigate(`/live/${inst.id}`)} color="blue">View</ActionBtn>
                   )}
                   {state === 'warm' && (
                     <ActionBtn onClick={() => inst && handleShutdown(inst)} loading={isLoading} color="red">Stop</ActionBtn>

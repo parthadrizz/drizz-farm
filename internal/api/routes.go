@@ -3,6 +3,7 @@ package api
 import (
 	"github.com/go-chi/chi/v5"
 
+	"github.com/drizz-dev/drizz-farm/internal/android"
 	"github.com/drizz-dev/drizz-farm/internal/config"
 	"github.com/drizz-dev/drizz-farm/internal/license"
 	"github.com/drizz-dev/drizz-farm/internal/pool"
@@ -25,6 +26,10 @@ func RegisterRoutes(r chi.Router, cfg *config.Config, p *pool.Pool, b *session.B
 		runner: deps.Runner,
 	}
 	cfgH := &configHandlers{cfg: cfg}
+	screenH := &screenHandlers{
+		pool: p,
+		adb:  android.NewADBClient(deps.SDK, deps.Runner),
+	}
 
 	r.Route("/api/v1", func(r chi.Router) {
 		// Sessions
@@ -41,6 +46,10 @@ func RegisterRoutes(r chi.Router, cfg *config.Config, p *pool.Pool, b *session.B
 
 		// Node
 		r.Get("/node/health", nodeH.Health)
+
+		// Screen streaming + input (WebSocket)
+		r.Get("/sessions/{id}/screen", screenH.StreamScreen)
+		r.Get("/sessions/{id}/input", screenH.SendInput)
 
 		// Config
 		r.Get("/config", cfgH.GetConfig)
