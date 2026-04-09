@@ -72,7 +72,8 @@
       "Bash(curl -s http://127.0.0.1:9401/api/v1/history/sessions)",
       "Bash(curl -s -X DELETE http://127.0.0.1:9401/api/v1/sessions/4e4a543c-6c3)",
       "Bash(curl -s \"http://127.0.0.1:9401/api/v1/history/sessions\")",
-      "Bash(curl -s --max-time 60 -X POST http://127.0.0.1:9401/api/v1/sessions -H 'Content-Type: application/json' -d '{\"profile\":\"api34_ext8_play\"}')"
+      "Bash(curl -s --max-time 60 -X POST http://127.0.0.1:9401/api/v1/sessions -H 'Content-Type: application/json' -d '{\"profile\":\"api34_ext8_play\"}')",
+      "Bash(git commit -m 'fix: smaller live view — compact header, 300px screen, minimal info:*)"
     ]
   }
 }
