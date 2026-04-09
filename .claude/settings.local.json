@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go version:*)",
+      "Bash(brew install:*)",
+      "Bash(/opt/homebrew/bin/go mod:*)",
+      "Bash(/opt/homebrew/bin/go get:*)",
+      "Bash(/opt/homebrew/bin/go build:*)",
+      "Bash(./bin/drizz-farm version:*)",
+      "Bash(/opt/homebrew/bin/go test:*)",
+      "Bash(git init:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m ':*)"
+    ]
+  }
+}
