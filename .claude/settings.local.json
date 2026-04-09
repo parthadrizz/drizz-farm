@@ -34,7 +34,8 @@
       "Bash(./bin/drizz-farm start:*)",
       "Bash(curl -s -X POST http://127.0.0.1:9401/api/v1/sessions -H 'Content-Type: application/json' -d '{\"profile\": \"api34_ext8_play\"}')",
       "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(f'Session: {d[\\\\\"id\\\\\"]}  Emulator: {d[\\\\\"connection\\\\\"][\\\\\"adb_serial\\\\\"]}'\\)\")",
-      "Bash(curl -s http://127.0.0.1:9401/api/v1/sessions/8e13bbed-460)"
+      "Bash(curl -s http://127.0.0.1:9401/api/v1/sessions/8e13bbed-460)",
+      "Bash(/opt/homebrew/bin/go vet:*)"
     ]
   }
 }

@@ -22,9 +22,10 @@ run: build
 test:
 	go test -race -count=1 ./...
 
-## test-integration: Run integration tests (requires Android SDK)
+## test-integration: Run integration tests (requires Android SDK + AVDs created)
+## Starts daemon, runs tests against live API, shuts down
 test-integration:
-	go test -race -count=1 -tags=integration ./...
+	go test -race -count=1 -tags=integration -timeout 10m -v ./tests/
 
 ## lint: Run golangci-lint
 lint:
