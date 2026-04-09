@@ -127,7 +127,7 @@ export function LiveView() {
           <button onClick={() => sendInput('back')} className="px-3 py-1 bg-gray-800 rounded text-[10px] hover:bg-gray-700">◀ Back</button>
           <button onClick={() => sendInput('home')} className="px-3 py-1 bg-gray-800 rounded text-[10px] hover:bg-gray-700">● Home</button>
           <button onClick={() => sendInput('recent')} className="px-3 py-1 bg-gray-800 rounded text-[10px] hover:bg-gray-700">■ Recent</button>
-          <button onClick={() => { if (id) api.execADB(id, 'am kill-all'); }} className="px-3 py-1 bg-red-900/50 text-red-400 rounded text-[10px] hover:bg-red-900/70">✕ Close All</button>
+          <button onClick={async () => { if (id) { const r = await api.execADB(id, 'pm list packages -3'); const pkgs = (r.output||'').split('\n').filter((l:string)=>l.startsWith('package:')).map((l:string)=>l.replace('package:','')); for (const pkg of pkgs) { await api.execADB(id, `am force-stop ${pkg}`); } } }} className="px-3 py-1 bg-red-900/50 text-red-400 rounded text-[10px] hover:bg-red-900/70">✕ Close All</button>
         </div>
       </div>
 
