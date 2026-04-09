@@ -129,19 +129,10 @@ export function LiveView() {
           <button onClick={() => sendInput('recent')} className="px-3 py-1 bg-gray-800 rounded text-[10px] hover:bg-gray-700">■ Recent</button>
           <button onClick={async () => {
             if (!id) return;
-            // Open recents
-            await api.execADB(id, 'input keyevent KEYCODE_APP_SWITCH');
-            await new Promise(r => setTimeout(r, 1000));
-            // Swipe left to get to "Clear all" (it's at the far left on Pixel)
-            for (let i = 0; i < 5; i++) {
-              await api.execADB(id, 'input swipe 200 1200 800 1200 150');
-              await new Promise(r => setTimeout(r, 300));
-            }
-            // Tap "Clear all" button (typically centered near bottom)
-            await api.execADB(id, 'input tap 540 1200');
-            await new Promise(r => setTimeout(r, 500));
-            // Go home
-            await api.execADB(id, 'input keyevent KEYCODE_HOME');
+            // Get all running app PIDs and kill them
+            const r = await api.execADB(id, "dumpsys activity recents | grep 'baseIntent' | sed 's/.*cmp=\\([^/]*\\).*/\\1/' | sort -u");
+            const pkgs = (r.output||'').split('\n').filter((l:string) => l.trim() && !l.includes('com.android.launcher') && !l.includes('com.google.android.apps.nexuslauncher'));
+            for (const pkg of pkgs) { await api.execADB(id, `am force-stop ${pkg.trim()}`); }
           }} className="px-3 py-1 bg-red-900/50 text-red-400 rounded text-[10px] hover:bg-red-900/70">✕ Close All</button>
         </div>
       </div>
