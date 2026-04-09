@@ -88,7 +88,8 @@
       "Bash(find /Users/humblefool2909/drizz-farm -name \"*_test.go\" -not -path \"*/node_modules/*\" -exec wc -l {} +)",
       "Bash(grep -c \"--- PASS\")",
       "Bash(mkdir -p /Users/humblefool2909/drizz-farm/mcp)",
-      "Bash(npm init:*)"
+      "Bash(npm init:*)",
+      "Bash(git commit -m 'fix: remove mcp/node_modules and dist from git, add to gitignore:*)"
     ]
   }
 }

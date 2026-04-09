@@ -2,6 +2,8 @@ bin/
 .idea/
 web/node_modules/
 web/dist/
+mcp/node_modules/
+mcp/dist/
 dist/
 *.exe
 *.dll
