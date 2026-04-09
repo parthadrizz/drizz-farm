@@ -99,8 +99,8 @@ export function LiveView() {
 
   return (
     <div className="flex gap-4">
-      {/* Left: Screen */}
-      <div className="flex-shrink-0">
+      {/* Left: Screen — fixed width */}
+      <div className="w-[260px] flex-shrink-0">
         <div className="flex items-center gap-3 mb-2">
           <button onClick={() => navigate('/')} className="text-xs text-gray-500 hover:text-gray-300">← Back</button>
           <span className="text-xs font-mono text-purple-400">{instance?.device_name || id}</span>
