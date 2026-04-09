@@ -11,7 +11,7 @@ const farm = new FarmClient(
 );
 
 const server = new McpServer({
-  name: "prodigy-core",
+  name: "drizz-farm",
   version: "0.1.0",
 });
 
@@ -223,7 +223,7 @@ function result(data: any) {
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("prodigy-core MCP server running (drizz-farm)");
+  console.error("drizz-farm MCP server running");
 }
 
 main().catch(console.error);

@@ -1,10 +1,10 @@
 {
-  "name": "@drizz/prodigy-mcp",
+  "name": "@drizz/mcp",
   "version": "0.1.0",
   "description": "MCP server for drizz-farm — connect AI coding tools to your local emulator lab",
   "main": "dist/index.js",
   "bin": {
-    "prodigy-mcp": "dist/index.js"
+    "drizz-farm-mcp": "dist/index.js"
   },
   "scripts": {
     "build": "tsc",
