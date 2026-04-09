@@ -72,7 +72,7 @@ function StreamTile({ instance, onClick }: { instance: DeviceInstance; onClick: 
 
   return (
     <div onClick={onClick} className="cursor-pointer group">
-      <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden hover:border-emerald-400/50 transition w-[340px] h-[756px] relative">
+      <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden hover:border-emerald-400/50 transition w-[320px] h-[711px] relative">
         {!connected ? (
           <div className="w-full h-full flex items-center justify-center bg-gray-950">
             <div className="animate-spin w-5 h-5 border-2 border-gray-700 border-t-emerald-400 rounded-full" />
