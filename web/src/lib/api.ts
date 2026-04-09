@@ -101,6 +101,16 @@ export const api = {
   saveConfigRaw: (yaml: string) =>
     fetch(BASE + '/config/raw', { method: 'PUT', body: yaml, headers: { 'Content-Type': 'text/yaml' } }).then(r => r.json()),
 
+  // Device simulation
+  setGPS: (id: string, lat: number, lng: number) => fetchJSON<any>(`/sessions/${id}/gps`, { method: 'POST', body: JSON.stringify({ latitude: lat, longitude: lng }) }),
+  setNetwork: (id: string, profile: string) => fetchJSON<any>(`/sessions/${id}/network`, { method: 'POST', body: JSON.stringify({ profile }) }),
+  setBattery: (id: string, level: number, charging: string) => fetchJSON<any>(`/sessions/${id}/battery`, { method: 'POST', body: JSON.stringify({ level, charging }) }),
+  setOrientation: (id: string, rotation: number) => fetchJSON<any>(`/sessions/${id}/orientation`, { method: 'POST', body: JSON.stringify({ rotation }) }),
+  setDarkMode: (id: string, dark: boolean) => fetchJSON<any>(`/sessions/${id}/appearance`, { method: 'POST', body: JSON.stringify({ dark }) }),
+  setLocale: (id: string, locale: string) => fetchJSON<any>(`/sessions/${id}/locale`, { method: 'POST', body: JSON.stringify({ locale }) }),
+  openDeeplink: (id: string, url: string) => fetchJSON<any>(`/sessions/${id}/deeplink`, { method: 'POST', body: JSON.stringify({ url }) }),
+  execADB: (id: string, command: string) => fetchJSON<any>(`/sessions/${id}/adb`, { method: 'POST', body: JSON.stringify({ command }) }),
+
   // Discovery
   systemImages: () => fetchJSON<{ images: SystemImage[] }>('/discovery/system-images'),
   availableImages: () => fetchJSON<{ images: SystemImage[] }>('/discovery/available-images'),

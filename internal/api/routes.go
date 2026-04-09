@@ -25,6 +25,10 @@ func RegisterRoutes(r chi.Router, cfg *config.Config, p *pool.Pool, b *session.B
 		sdk:    deps.SDK,
 		runner: deps.Runner,
 	}
+	devH := &deviceHandlers{
+		pool: p,
+		adb:  android.NewADBClient(deps.SDK, deps.Runner),
+	}
 	cfgH := &configHandlers{cfg: cfg}
 	histH := &historyHandlers{store: deps.Store}
 	snapH := &snapshotHandlers{
@@ -55,6 +59,17 @@ func RegisterRoutes(r chi.Router, cfg *config.Config, p *pool.Pool, b *session.B
 		// Screen streaming + input (WebSocket)
 		r.Get("/sessions/{id}/screen", screenH.StreamScreen)
 		r.Get("/sessions/{id}/input", screenH.SendInput)
+
+		// Device simulation
+		r.Post("/sessions/{id}/gps", devH.SetGPS)
+		r.Post("/sessions/{id}/network", devH.SetNetwork)
+		r.Post("/sessions/{id}/battery", devH.SetBattery)
+		r.Post("/sessions/{id}/orientation", devH.SetOrientation)
+		r.Post("/sessions/{id}/locale", devH.SetLocale)
+		r.Post("/sessions/{id}/appearance", devH.SetDarkMode)
+		r.Post("/sessions/{id}/install", devH.InstallAPK)
+		r.Post("/sessions/{id}/deeplink", devH.OpenDeeplink)
+		r.Post("/sessions/{id}/adb", devH.ExecADB)
 
 		// Snapshots
 		r.Post("/sessions/{id}/snapshot/save", snapH.Save)
