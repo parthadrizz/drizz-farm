@@ -82,11 +82,8 @@ function StreamTile({ instance, onClick }: { instance: DeviceInstance; onClick: 
         )}
         <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition" />
       </div>
-      <div className="mt-1.5 flex items-center gap-1.5 px-0.5">
-        <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-          instance.state === 'allocated' ? 'bg-blue-400' : 'bg-emerald-400'
-        }`} />
-        <span className="text-[11px] text-gray-400 truncate">{instance.device_name}</span>
+      <div className="mt-2 text-center">
+        <span className="text-[11px] text-purple-400 font-mono">{instance.device_name}</span>
       </div>
     </div>
   );
