@@ -58,10 +58,13 @@ function StreamTile({ instance, onClick }: { instance: DeviceInstance; onClick: 
       img.onload = () => {
         const canvas = canvasRef.current;
         if (!canvas) return;
-        canvas.width = img.width;
-        canvas.height = img.height;
+        // Set canvas size once, then just redraw — prevents layout thrashing
+        if (canvas.width !== 320 || canvas.height !== 711) {
+          canvas.width = 320;
+          canvas.height = 711;
+        }
         const ctx = canvas.getContext('2d');
-        if (ctx) ctx.drawImage(img, 0, 0);
+        if (ctx) ctx.drawImage(img, 0, 0, 320, 711);
         URL.revokeObjectURL(url);
       };
       img.src = url;
