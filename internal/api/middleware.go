@@ -1,6 +1,9 @@
 package api
 
 import (
+	"bufio"
+	"fmt"
+	"net"
 	"net/http"
 	"time"
 
@@ -73,6 +76,7 @@ func Recovery(next http.Handler) http.Handler {
 }
 
 // statusWriter wraps ResponseWriter to capture the status code.
+// Also implements http.Hijacker for WebSocket support.
 type statusWriter struct {
 	http.ResponseWriter
 	status int
@@ -81,4 +85,19 @@ type statusWriter struct {
 func (w *statusWriter) WriteHeader(code int) {
 	w.status = code
 	w.ResponseWriter.WriteHeader(code)
+}
+
+// Hijack implements http.Hijacker for WebSocket support.
+func (w *statusWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if hj, ok := w.ResponseWriter.(http.Hijacker); ok {
+		return hj.Hijack()
+	}
+	return nil, nil, fmt.Errorf("underlying ResponseWriter does not implement http.Hijacker")
+}
+
+// Flush implements http.Flusher.
+func (w *statusWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
