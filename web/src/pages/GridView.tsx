@@ -28,12 +28,9 @@ export function GridView() {
     );
   }
 
-  // 3-4 columns so tiles stay compact
-  const cols = liveInstances.length <= 3 ? 3 : liveInstances.length <= 8 ? 4 : 5;
-
   return (
     <div>
-      <div className={`grid gap-3`} style={{ gridTemplateColumns: `repeat(${cols}, 1fr)` }}>
+      <div className="flex flex-wrap gap-4 justify-center">
         {liveInstances.map(inst => (
           <StreamTile key={inst.id} instance={inst} onClick={() => navigate(`/live/${inst.id}`)} />
         ))}
@@ -75,7 +72,7 @@ function StreamTile({ instance, onClick }: { instance: DeviceInstance; onClick: 
 
   return (
     <div onClick={onClick} className="cursor-pointer group">
-      <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden hover:border-emerald-400/50 transition w-[168px] h-[373px] relative">
+      <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden hover:border-emerald-400/50 transition w-[340px] h-[756px] relative">
         {!connected ? (
           <div className="w-full h-full flex items-center justify-center bg-gray-950">
             <div className="animate-spin w-5 h-5 border-2 border-gray-700 border-t-emerald-400 rounded-full" />
