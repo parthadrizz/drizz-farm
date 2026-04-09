@@ -86,7 +86,9 @@
       "WebFetch(domain:www.lambdatest.com)",
       "Bash(grep -E \"✓|✗|---|===|Passed|Failed|Total|PASS$|FAIL$\")",
       "Bash(find /Users/humblefool2909/drizz-farm -name \"*_test.go\" -not -path \"*/node_modules/*\" -exec wc -l {} +)",
-      "Bash(grep -c \"--- PASS\")"
+      "Bash(grep -c \"--- PASS\")",
+      "Bash(mkdir -p /Users/humblefool2909/drizz-farm/mcp)",
+      "Bash(npm init:*)"
     ]
   }
 }

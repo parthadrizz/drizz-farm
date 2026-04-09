@@ -498,6 +498,166 @@ func (h *deviceHandlers) ForceStop(w http.ResponseWriter, r *http.Request) {
 	JSON(w, 200, map[string]any{"status": "stopped", "package": req.Package})
 }
 
+// GetUITree handles GET /api/v1/sessions/:id/ui-tree — accessibility tree
+func (h *deviceHandlers) GetUITree(w http.ResponseWriter, r *http.Request) {
+	serial := h.findSerial(chi.URLParam(r, "id"))
+	if serial == "" { JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404}); return }
+	output, err := h.adb.Shell(r.Context(), serial, "uiautomator dump /dev/tty")
+	if err != nil { JSON(w, 500, ErrorResponse{Error: "ui_tree_failed", Message: err.Error(), Code: 500}); return }
+	JSON(w, 200, map[string]any{"tree": output})
+}
+
+// GetActivity handles GET /api/v1/sessions/:id/activity — current foreground activity
+func (h *deviceHandlers) GetActivity(w http.ResponseWriter, r *http.Request) {
+	serial := h.findSerial(chi.URLParam(r, "id"))
+	if serial == "" { JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404}); return }
+	output, _ := h.adb.Shell(r.Context(), serial, "dumpsys activity activities | grep mResumedActivity")
+	JSON(w, 200, map[string]any{"activity": output})
+}
+
+// GetDeviceInfo handles GET /api/v1/sessions/:id/device-info — all device properties
+func (h *deviceHandlers) GetDeviceInfo(w http.ResponseWriter, r *http.Request) {
+	serial := h.findSerial(chi.URLParam(r, "id"))
+	if serial == "" { JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404}); return }
+	model, _ := h.adb.GetProp(r.Context(), serial, "ro.product.model")
+	brand, _ := h.adb.GetProp(r.Context(), serial, "ro.product.brand")
+	api, _ := h.adb.GetProp(r.Context(), serial, "ro.build.version.sdk")
+	version, _ := h.adb.GetProp(r.Context(), serial, "ro.build.version.release")
+	locale, _ := h.adb.GetProp(r.Context(), serial, "persist.sys.locale")
+	tz, _ := h.adb.GetProp(r.Context(), serial, "persist.sys.timezone")
+	screenSize, _ := h.adb.Shell(r.Context(), serial, "wm size")
+	density, _ := h.adb.Shell(r.Context(), serial, "wm density")
+	battery, _ := h.adb.Shell(r.Context(), serial, "dumpsys battery | grep level")
+	mem, _ := h.adb.Shell(r.Context(), serial, "cat /proc/meminfo | head -3")
+	JSON(w, 200, map[string]any{
+		"model": model, "brand": brand, "api_level": api, "android_version": version,
+		"locale": locale, "timezone": tz, "screen_size": screenSize, "density": density,
+		"battery": battery, "memory": mem, "serial": serial,
+	})
+}
+
+// GetScreenText handles GET /api/v1/sessions/:id/screen-text — all visible text
+func (h *deviceHandlers) GetScreenText(w http.ResponseWriter, r *http.Request) {
+	serial := h.findSerial(chi.URLParam(r, "id"))
+	if serial == "" { JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404}); return }
+	// Dump UI and extract text attributes
+	output, _ := h.adb.Shell(r.Context(), serial, "uiautomator dump /dev/tty 2>/dev/null | grep -oP 'text=\"[^\"]*\"' | sed 's/text=\"//;s/\"//' | grep -v '^$'")
+	JSON(w, 200, map[string]any{"text": output})
+}
+
+// GetNotifications handles GET /api/v1/sessions/:id/notifications
+func (h *deviceHandlers) GetNotifications(w http.ResponseWriter, r *http.Request) {
+	serial := h.findSerial(chi.URLParam(r, "id"))
+	if serial == "" { JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404}); return }
+	output, _ := h.adb.Shell(r.Context(), serial, "dumpsys notification --noredact | grep -A2 'NotificationRecord' | head -30")
+	JSON(w, 200, map[string]any{"notifications": output})
+}
+
+// GetClipboard handles GET /api/v1/sessions/:id/clipboard/get
+func (h *deviceHandlers) GetClipboard(w http.ResponseWriter, r *http.Request) {
+	serial := h.findSerial(chi.URLParam(r, "id"))
+	if serial == "" { JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404}); return }
+	output, _ := h.adb.Shell(r.Context(), serial, "service call clipboard 2 s16 com.android.shell")
+	JSON(w, 200, map[string]any{"clipboard": output})
+}
+
+// IsKeyboardShown handles GET /api/v1/sessions/:id/keyboard
+func (h *deviceHandlers) IsKeyboardShown(w http.ResponseWriter, r *http.Request) {
+	serial := h.findSerial(chi.URLParam(r, "id"))
+	if serial == "" { JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404}); return }
+	output, _ := h.adb.Shell(r.Context(), serial, "dumpsys input_method | grep mInputShown")
+	shown := false
+	if output != "" && (len(output) > 0) {
+		shown = contains(output, "mInputShown=true")
+	}
+	JSON(w, 200, map[string]any{"shown": shown})
+}
+
+// PressKey handles POST /api/v1/sessions/:id/key
+func (h *deviceHandlers) PressKey(w http.ResponseWriter, r *http.Request) {
+	serial := h.findSerial(chi.URLParam(r, "id"))
+	if serial == "" { JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404}); return }
+	var req struct { Keycode string `json:"keycode"` }
+	json.NewDecoder(r.Body).Decode(&req)
+	h.adb.Shell(r.Context(), serial, fmt.Sprintf("input keyevent %s", req.Keycode))
+	JSON(w, 200, map[string]any{"status": "pressed", "keycode": req.Keycode})
+}
+
+// LongPress handles POST /api/v1/sessions/:id/long-press
+func (h *deviceHandlers) LongPress(w http.ResponseWriter, r *http.Request) {
+	serial := h.findSerial(chi.URLParam(r, "id"))
+	if serial == "" { JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404}); return }
+	var req struct { X int `json:"x"`; Y int `json:"y"`; DurationMS int `json:"duration_ms"` }
+	json.NewDecoder(r.Body).Decode(&req)
+	if req.DurationMS == 0 { req.DurationMS = 1000 }
+	h.adb.Shell(r.Context(), serial, fmt.Sprintf("input swipe %d %d %d %d %d", req.X, req.Y, req.X, req.Y, req.DurationMS))
+	JSON(w, 200, map[string]any{"status": "pressed", "x": req.X, "y": req.Y})
+}
+
+// ScrollToText handles POST /api/v1/sessions/:id/scroll-to
+func (h *deviceHandlers) ScrollToText(w http.ResponseWriter, r *http.Request) {
+	serial := h.findSerial(chi.URLParam(r, "id"))
+	if serial == "" { JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404}); return }
+	var req struct { Text string `json:"text"`; MaxScrolls int `json:"max_scrolls"` }
+	json.NewDecoder(r.Body).Decode(&req)
+	if req.MaxScrolls == 0 { req.MaxScrolls = 10 }
+
+	for i := 0; i < req.MaxScrolls; i++ {
+		// Check if text is visible
+		output, _ := h.adb.Shell(r.Context(), serial, "uiautomator dump /dev/tty 2>/dev/null")
+		if contains(output, req.Text) {
+			JSON(w, 200, map[string]any{"status": "found", "scrolls": i})
+			return
+		}
+		// Scroll down
+		h.adb.Shell(r.Context(), serial, "input swipe 540 1500 540 500 300")
+		time.Sleep(500 * time.Millisecond)
+	}
+	JSON(w, 200, map[string]any{"status": "not_found", "scrolls": req.MaxScrolls})
+}
+
+// WaitForElement handles POST /api/v1/sessions/:id/wait-for
+func (h *deviceHandlers) WaitForElement(w http.ResponseWriter, r *http.Request) {
+	serial := h.findSerial(chi.URLParam(r, "id"))
+	if serial == "" { JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404}); return }
+	var req struct { Text string `json:"text"`; TimeoutSeconds int `json:"timeout_seconds"` }
+	json.NewDecoder(r.Body).Decode(&req)
+	if req.TimeoutSeconds == 0 { req.TimeoutSeconds = 10 }
+
+	deadline := time.Now().Add(time.Duration(req.TimeoutSeconds) * time.Second)
+	for time.Now().Before(deadline) {
+		output, _ := h.adb.Shell(r.Context(), serial, "uiautomator dump /dev/tty 2>/dev/null")
+		if contains(output, req.Text) {
+			JSON(w, 200, map[string]any{"status": "found", "waited": time.Since(deadline.Add(-time.Duration(req.TimeoutSeconds)*time.Second)).String()})
+			return
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	JSON(w, 200, map[string]any{"status": "timeout", "text": req.Text})
+}
+
+// GetPackageInfo handles GET /api/v1/sessions/:id/package-info?package=com.app
+func (h *deviceHandlers) GetPackageInfo(w http.ResponseWriter, r *http.Request) {
+	serial := h.findSerial(chi.URLParam(r, "id"))
+	if serial == "" { JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404}); return }
+	pkg := r.URL.Query().Get("package")
+	if pkg == "" { JSON(w, 400, ErrorResponse{Error: "invalid_request", Message: "package param required", Code: 400}); return }
+	output, _ := h.adb.Shell(r.Context(), serial, fmt.Sprintf("dumpsys package %s | head -20", pkg))
+	JSON(w, 200, map[string]any{"package": pkg, "info": output})
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
+		(len(s) > 0 && len(substr) > 0 && findSubstring(s, substr)))
+}
+
+func findSubstring(s, sub string) bool {
+	for i := 0; i <= len(s)-len(sub); i++ {
+		if s[i:i+len(sub)] == sub { return true }
+	}
+	return false
+}
+
 // ExecADB handles POST /api/v1/sessions/:id/adb — raw ADB command
 func (h *deviceHandlers) ExecADB(w http.ResponseWriter, r *http.Request) {
 	serial := h.findSerial(chi.URLParam(r, "id"))

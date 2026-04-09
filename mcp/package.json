@@ -1,0 +1,25 @@
+{
+  "name": "@drizz/prodigy-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for drizz-farm — connect AI coding tools to your local emulator lab",
+  "main": "dist/index.js",
+  "bin": {
+    "prodigy-mcp": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js"
+  },
+  "keywords": ["mcp", "android", "emulator", "testing", "drizz-farm", "ai"],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.2",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.2"
+  }
+}

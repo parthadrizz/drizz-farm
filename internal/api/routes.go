@@ -95,6 +95,18 @@ func RegisterRoutes(r chi.Router, cfg *config.Config, p *pool.Pool, b *session.B
 		r.Post("/sessions/{id}/wifi", devH.WifiToggle)
 		r.Post("/sessions/{id}/launch", devH.LaunchApp)
 		r.Post("/sessions/{id}/force-stop", devH.ForceStop)
+		r.Get("/sessions/{id}/ui-tree", devH.GetUITree)
+		r.Get("/sessions/{id}/activity", devH.GetActivity)
+		r.Get("/sessions/{id}/device-info", devH.GetDeviceInfo)
+		r.Get("/sessions/{id}/screen-text", devH.GetScreenText)
+		r.Get("/sessions/{id}/notifications", devH.GetNotifications)
+		r.Get("/sessions/{id}/clipboard/get", devH.GetClipboard)
+		r.Get("/sessions/{id}/keyboard", devH.IsKeyboardShown)
+		r.Get("/sessions/{id}/package-info", devH.GetPackageInfo)
+		r.Post("/sessions/{id}/key", devH.PressKey)
+		r.Post("/sessions/{id}/long-press", devH.LongPress)
+		r.Post("/sessions/{id}/scroll-to", devH.ScrollToText)
+		r.Post("/sessions/{id}/wait-for", devH.WaitForElement)
 		r.Post("/sessions/{id}/adb", devH.ExecADB)
 
 		// Recording + Artifacts
