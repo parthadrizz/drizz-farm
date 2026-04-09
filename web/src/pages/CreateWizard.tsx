@@ -95,7 +95,7 @@ export function CreateWizard() {
                 className={`px-3 py-1.5 rounded-md text-sm whitespace-nowrap transition ${
                   activeCategory === g.category ? 'bg-gray-800 text-white' : 'text-gray-500 hover:text-gray-300'
                 }`}>
-                {g.icon} {g.category.charAt(0).toUpperCase() + g.category.slice(1)} ({g.devices.length})
+                {g.category.charAt(0).toUpperCase() + g.category.slice(1)} ({g.devices.length})
               </button>
             ))}
           </div>

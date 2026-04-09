@@ -57,14 +57,14 @@ const CATALOG: Record<string, Omit<DeviceDef, 'id'>> = {
 };
 
 const CATEGORY_ICONS: Record<string, string> = {
-  phone: '📱',
-  tablet: '📟',
-  foldable: '📖',
-  tv: '📺',
-  automotive: '🚗',
-  wear: '⌚',
-  desktop: '🖥️',
-  other: '📦',
+  phone: '',
+  tablet: '',
+  foldable: '',
+  tv: '',
+  automotive: '',
+  wear: '',
+  desktop: '',
+  other: '',
 };
 
 const CATEGORY_ORDER = ['phone', 'foldable', 'tablet', 'tv', 'wear', 'automotive', 'desktop', 'other'];
