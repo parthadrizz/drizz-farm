@@ -28,10 +28,13 @@ export function GridView() {
     );
   }
 
+  // Sort by device name so tiles don't hop around on refresh
+  const sorted = [...liveInstances].sort((a, b) => a.device_name.localeCompare(b.device_name));
+
   return (
     <div>
       <div className="flex flex-wrap gap-4 justify-center">
-        {liveInstances.map(inst => (
+        {sorted.map(inst => (
           <StreamTile key={inst.id} instance={inst} onClick={() => navigate(`/live/${inst.id}`)} />
         ))}
       </div>
