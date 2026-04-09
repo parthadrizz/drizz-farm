@@ -106,18 +106,9 @@ func runStart(cmd *cobra.Command, args []string) error {
 		log.Info().Msg("emulator windows will be visible (--visible flag)")
 	}
 
-	// Initialize pool
+	// Initialize pool (don't start yet — API goes first)
 	runner := &android.DefaultRunner{}
 	emulatorPool := pool.New(cfg, sdk, runner)
-	// Determine which AVDs to boot
-	var startOpts *pool.StartOptions
-	if len(args) > 0 {
-		startOpts = &pool.StartOptions{AVDNames: args}
-	}
-
-	if err := emulatorPool.Start(ctx, startOpts); err != nil {
-		return fmt.Errorf("pool start: %w", err)
-	}
 
 	// Session broker
 	broker := session.NewBroker(cfg, emulatorPool)
@@ -144,43 +135,53 @@ func runStart(cmd *cobra.Command, args []string) error {
 	// mDNS announcement
 	var announcer *discovery.Announcer
 	if cfg.Network.MDNS.Enabled {
-		mdnsPoolStatus := emulatorPool.Status()
 		announcer, err = discovery.NewAnnouncer(ctx, discovery.AnnounceConfig{
 			NodeName:      cfg.Node.Name,
 			Port:          cfg.API.Port,
 			Version:       buildinfo.Version,
 			Tier:          string(lic.Current().Tier),
-			AndroidAvail:  mdnsPoolStatus.Warm,
-			TotalCapacity: mdnsPoolStatus.TotalCapacity,
+			TotalCapacity: cfg.Pool.MaxConcurrent,
 		})
 		if err != nil {
 			log.Warn().Err(err).Msg("mDNS announcement failed (continuing)")
 		}
 	}
 
-	// API server
+	// API server — start BEFORE pool warmup so status works during boot
 	server := api.NewServer(cfg, emulatorPool, broker, lic, api.ServerDeps{StartedAt: startedAt})
 
-	// Start API in goroutine
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- server.Start()
 	}()
 
-	poolStatus := emulatorPool.Status()
 	log.Info().
 		Str("node", cfg.Node.Name).
 		Int("api_port", cfg.API.Port).
 		Str("tier", string(lic.Current().Tier)).
-		Int("warm", poolStatus.Warm).
-		Int("capacity", poolStatus.TotalCapacity).
-		Msg("drizz-farm is LIVE")
+		Msg("drizz-farm is LIVE — API ready, warming pool...")
 
 	fmt.Printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 	fmt.Printf("  drizz-farm is LIVE on %s:%d\n", cfg.API.Host, cfg.API.Port)
 	fmt.Printf("  Node: %s | Tier: %s\n", cfg.Node.Name, lic.Current().Tier)
-	fmt.Printf("  Pool: %d warm / %d capacity\n", poolStatus.Warm, poolStatus.TotalCapacity)
 	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
+
+	// Warm pool in background — API is already serving, status shows BOOTING
+	var startOpts *pool.StartOptions
+	if len(args) > 0 {
+		startOpts = &pool.StartOptions{AVDNames: args}
+	}
+
+	go func() {
+		if err := emulatorPool.Start(ctx, startOpts); err != nil {
+			log.Error().Err(err).Msg("pool warmup failed")
+		}
+		poolStatus := emulatorPool.Status()
+		log.Info().
+			Int("warm", poolStatus.Warm).
+			Int("capacity", poolStatus.TotalCapacity).
+			Msg("pool warmup complete")
+	}()
 
 	// Wait for signal or error
 	select {

@@ -463,10 +463,26 @@ func (p *Pool) watchProcess(inst *EmulatorInstance) {
 	p.removeInstance(inst.ID)
 }
 
-// resetInstance restores the clean snapshot on an emulator.
+// resetInstance resets an emulator to clean state after a session.
+// Tries snapshot restore first (fast ~5s), falls back to reboot.
 func (p *Pool) resetInstance(ctx context.Context, inst *EmulatorInstance) error {
-	log.Info().Str("instance", inst.ID).Msg("pool: resetting emulator via snapshot restore")
-	return p.emuCtrl.SnapshotLoad(ctx, p.adb, inst.Serial, "drizz_clean")
+	log.Info().Str("instance", inst.ID).Str("avd", inst.AVDName).Msg("pool: resetting emulator")
+
+	// Try snapshot restore (only works if we saved one during boot)
+	err := p.emuCtrl.SnapshotLoad(ctx, p.adb, inst.Serial, "drizz_clean")
+	if err == nil {
+		return nil
+	}
+
+	// Snapshot failed — fall back to clearing user-installed apps
+	log.Warn().Err(err).Str("instance", inst.ID).Msg("pool: snapshot restore failed, clearing apps instead")
+	packages, listErr := p.adb.ListThirdPartyPackages(ctx, inst.Serial)
+	if listErr == nil {
+		for _, pkg := range packages {
+			_ = p.adb.Uninstall(ctx, inst.Serial, pkg)
+		}
+	}
+	return nil
 }
 
 // destroyInstance kills the emulator and cleans up.

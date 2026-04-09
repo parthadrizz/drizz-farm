@@ -21,11 +21,17 @@ import (
 
 func toDisplayState(s pool.EmulatorState) string {
 	switch s {
-	case pool.StateBooting, pool.StateCreating:
+	case pool.StateCreating:
+		return "CREATING"
+	case pool.StateBooting:
 		return "BOOTING"
-	case pool.StateWarm, pool.StateAllocated:
+	case pool.StateWarm:
 		return "ONLINE"
-	case pool.StateResetting, pool.StateDestroying:
+	case pool.StateAllocated:
+		return "ALLOCATED"
+	case pool.StateResetting:
+		return "RESETTING"
+	case pool.StateDestroying:
 		return "SHUTTING DOWN"
 	case pool.StateError:
 		return "ERROR"
@@ -36,11 +42,11 @@ func toDisplayState(s pool.EmulatorState) string {
 
 func stateIcon(displayState string) string {
 	switch displayState {
-	case "ONLINE":
+	case "ONLINE", "ALLOCATED":
 		return "●"
-	case "BOOTING":
+	case "CREATING", "BOOTING":
 		return "◐"
-	case "SHUTTING DOWN":
+	case "RESETTING", "SHUTTING DOWN":
 		return "↻"
 	case "ERROR":
 		return "✗"
