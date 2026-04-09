@@ -47,7 +47,9 @@
       "Bash(npx tailwindcss:*)",
       "Bash(python3 -c \"import json,sys; print\\(json.load\\(sys.stdin\\)['version']\\)\")",
       "Bash(npm uninstall:*)",
-      "Bash(curl -s http://127.0.0.1:9401/api/v1/discovery/system-images)"
+      "Bash(curl -s http://127.0.0.1:9401/api/v1/discovery/system-images)",
+      "Bash(curl -sv http://127.0.0.1:9401/api/v1/discovery/devices)",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(f'{len\\(d[\\\\\"devices\\\\\"]\\)} devices'\\)\")"
     ]
   }
 }
