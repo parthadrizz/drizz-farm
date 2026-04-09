@@ -7,11 +7,13 @@ import (
 
 	"github.com/drizz-dev/drizz-farm/internal/android"
 	"github.com/drizz-dev/drizz-farm/internal/config"
+	"github.com/drizz-dev/drizz-farm/internal/store"
 )
 
 type discoveryHandlers struct {
 	sdk    *android.SDK
 	runner android.CommandRunner
+	store  *store.Store
 }
 
 type systemImageResponse struct {
@@ -160,6 +162,9 @@ func (h *discoveryHandlers) CreateAVDs(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		created++
+		if h.store != nil {
+			h.store.RecordAVDCreation(name, req.ProfileName, req.Device, req.SystemImage)
+		}
 	}
 
 	JSON(w, http.StatusOK, map[string]any{

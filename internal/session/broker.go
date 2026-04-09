@@ -13,6 +13,7 @@ import (
 
 	"github.com/drizz-dev/drizz-farm/internal/config"
 	"github.com/drizz-dev/drizz-farm/internal/pool"
+	"github.com/drizz-dev/drizz-farm/internal/store"
 )
 
 var (
@@ -28,20 +29,22 @@ type Broker struct {
 	pool      *pool.Pool
 	queue     *Queue
 	cfg       *config.Config
+	store     *store.Store
 	hostIP    string
-	readyCh   chan struct{} // signaled when pool has a free emulator
+	readyCh   chan struct{}
 
 	cancel context.CancelFunc
 }
 
 // NewBroker creates a new session broker.
-func NewBroker(cfg *config.Config, p *pool.Pool) *Broker {
+func NewBroker(cfg *config.Config, p *pool.Pool, s *store.Store) *Broker {
 	queueTimeout := time.Duration(cfg.Pool.QueueTimeoutSeconds) * time.Second
 	readyCh := make(chan struct{}, 10) // buffered so notify never blocks
 
 	b := &Broker{
 		sessions: make(map[string]*Session),
 		pool:     p,
+		store:    s,
 		queue:    NewQueue(cfg.Pool.QueueMaxSize, queueTimeout),
 		cfg:      cfg,
 		hostIP:   detectLANIP(),
@@ -131,6 +134,12 @@ func (b *Broker) Release(ctx context.Context, id string) error {
 		Dur("duration", now.Sub(sess.CreatedAt)).
 		Msg("broker: session released")
 
+	// Persist to SQLite
+	if b.store != nil {
+		b.store.RecordSession(sess.ID, sess.Profile, sess.Platform, sess.InstanceID, "", sess.Connection.ADBSerial, sess.Connection.Host, sess.Source, "released", sess.Connection.ADBPort, sess.CreatedAt, sess.ReleasedAt)
+		b.store.RecordEvent("session_released", sess.InstanceID, sess.ID, fmt.Sprintf("duration=%s", now.Sub(sess.CreatedAt)))
+	}
+
 	// Release emulator back to pool (triggers snapshot restore)
 	if err := b.pool.Release(ctx, sess.InstanceID); err != nil {
 		log.Error().Err(err).Str("session", id).Msg("broker: pool release failed")
@@ -215,6 +224,17 @@ func (b *Broker) createSessionFromInstance(inst *pool.DeviceInstance, req Create
 		Time("expires", sess.ExpiresAt).
 		Msg("broker: session created")
 
+	// Persist to SQLite
+	if b.store != nil {
+		deviceName := ""
+		if inst.Device != nil {
+			deviceName = inst.Device.DisplayName()
+		}
+		conn := b.buildConnectionInfo(inst)
+		b.store.RecordSession(sess.ID, sess.Profile, sess.Platform, inst.ID, deviceName, conn.ADBSerial, conn.Host, sess.Source, "active", conn.ADBPort, sess.CreatedAt, nil)
+		b.store.RecordEvent("session_created", inst.ID, sess.ID, "profile="+sess.Profile)
+	}
+
 	return sess
 }
 
@@ -254,6 +274,10 @@ func (b *Broker) enforceTimeouts(ctx context.Context) {
 		b.mu.Unlock()
 
 		if sess, err := b.Get(id); err == nil {
+			if b.store != nil {
+				b.store.RecordSession(sess.ID, sess.Profile, sess.Platform, sess.InstanceID, "", sess.Connection.ADBSerial, sess.Connection.Host, sess.Source, "timed_out", sess.Connection.ADBPort, sess.CreatedAt, sess.ReleasedAt)
+				b.store.RecordEvent("session_timed_out", sess.InstanceID, sess.ID, "")
+			}
 			_ = b.pool.Release(ctx, sess.InstanceID)
 		}
 	}

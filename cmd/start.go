@@ -123,7 +123,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 	}
 
 	// Session broker
-	broker := session.NewBroker(cfg, emulatorPool)
+	broker := session.NewBroker(cfg, emulatorPool, dataStore)
 	broker.Start(ctx)
 
 	// Health checker
