@@ -115,7 +115,7 @@ export function LiveView() {
       <div className="flex justify-center">
         <div className="bg-gray-900 border border-gray-800 rounded-lg p-1.5 inline-block">
           {!connected ? (
-            <div className="w-[270px] h-[480px] flex items-center justify-center text-gray-500">
+            <div className="w-[180px] h-[320px] flex items-center justify-center text-gray-500">
               <div className="text-center">
                 <div className="animate-spin w-5 h-5 border-2 border-gray-600 border-t-emerald-400 rounded-full mx-auto mb-2" />
                 <div className="text-xs">Connecting...</div>
@@ -125,7 +125,7 @@ export function LiveView() {
             <canvas
               ref={canvasRef}
               onClick={handleCanvasClick}
-              className="max-w-[300px] max-h-[600px] cursor-crosshair rounded"
+              className="max-w-[180px] max-h-[360px] cursor-crosshair rounded"
               style={{ imageRendering: 'auto' }}
             />
           )}
