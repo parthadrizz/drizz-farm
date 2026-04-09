@@ -92,6 +92,7 @@ type CleanupConfig struct {
 	OnSessionEnd             string `yaml:"on_session_end"              mapstructure:"on_session_end"`
 	OrphanCheckIntervalSecs  int    `yaml:"orphan_check_interval_seconds" mapstructure:"orphan_check_interval_seconds"`
 	DiskCleanupThresholdGB   int    `yaml:"disk_cleanup_threshold_gb"   mapstructure:"disk_cleanup_threshold_gb"`
+	IdleTimeoutMinutes       int    `yaml:"idle_timeout_minutes"        mapstructure:"idle_timeout_minutes"`
 }
 
 type ArtifactsConfig struct {

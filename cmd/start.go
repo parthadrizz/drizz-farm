@@ -24,20 +24,14 @@ import (
 	"github.com/drizz-dev/drizz-farm/internal/session"
 )
 
-var (
-	visibleEmulators bool
-	startOnly        []string
-)
+var visibleEmulators bool
 
 var startCmd = &cobra.Command{
-	Use:   "start [avd-names...]",
+	Use:   "start",
 	Short: "Start the drizz-farm daemon",
-	Long: `Starts the emulator pool manager daemon and boots emulators.
-
-By default boots all warmup AVDs from config. Pass AVD names to boot specific ones:
-  drizz-farm start                                    # boot all warmup AVDs
-  drizz-farm start drizz_api34_ext8_play_0            # boot only this one
-  drizz-farm start Pixel_8_API_34-ext8 drizz_api34_ext8_play_0  # boot these two`,
+	Long: `Starts the daemon — API server, monitoring, and pool manager.
+Emulators are NOT booted at start. They boot on-demand when sessions are created.
+Idle emulators shut down automatically after the configured timeout.`,
 	RunE: runStart,
 }
 
@@ -106,9 +100,12 @@ func runStart(cmd *cobra.Command, args []string) error {
 		log.Info().Msg("emulator windows will be visible (--visible flag)")
 	}
 
-	// Initialize pool (don't start yet — API goes first)
+	// Initialize pool — boots nothing, emulators start on-demand
 	runner := &android.DefaultRunner{}
 	emulatorPool := pool.New(cfg, sdk, runner)
+	if err := emulatorPool.Start(ctx); err != nil {
+		return fmt.Errorf("pool start: %w", err)
+	}
 
 	// Session broker
 	broker := session.NewBroker(cfg, emulatorPool)
@@ -147,7 +144,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// API server — start BEFORE pool warmup so status works during boot
+	// API server
 	server := api.NewServer(cfg, emulatorPool, broker, lic, api.ServerDeps{StartedAt: startedAt})
 
 	errCh := make(chan error, 1)
@@ -159,29 +156,14 @@ func runStart(cmd *cobra.Command, args []string) error {
 		Str("node", cfg.Node.Name).
 		Int("api_port", cfg.API.Port).
 		Str("tier", string(lic.Current().Tier)).
-		Msg("drizz-farm is LIVE — API ready, warming pool...")
+		Int("capacity", cfg.Pool.MaxConcurrent).
+		Msg("drizz-farm is LIVE — emulators boot on-demand")
 
 	fmt.Printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 	fmt.Printf("  drizz-farm is LIVE on %s:%d\n", cfg.API.Host, cfg.API.Port)
 	fmt.Printf("  Node: %s | Tier: %s\n", cfg.Node.Name, lic.Current().Tier)
+	fmt.Printf("  Emulators boot on-demand (capacity: %d)\n", cfg.Pool.MaxConcurrent)
 	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
-
-	// Warm pool in background — API is already serving, status shows BOOTING
-	var startOpts *pool.StartOptions
-	if len(args) > 0 {
-		startOpts = &pool.StartOptions{AVDNames: args}
-	}
-
-	go func() {
-		if err := emulatorPool.Start(ctx, startOpts); err != nil {
-			log.Error().Err(err).Msg("pool warmup failed")
-		}
-		poolStatus := emulatorPool.Status()
-		log.Info().
-			Int("warm", poolStatus.Warm).
-			Int("capacity", poolStatus.TotalCapacity).
-			Msg("pool warmup complete")
-	}()
 
 	// Wait for signal or error
 	select {

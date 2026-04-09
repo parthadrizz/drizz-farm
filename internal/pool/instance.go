@@ -17,10 +17,11 @@ type EmulatorInstance struct {
 	State       EmulatorState     `json:"state"`
 	Ports       android.PortPair  `json:"ports"`
 	Serial      string            `json:"serial"` // e.g., "emulator-5554"
-	SessionID   string            `json:"session_id,omitempty"`
-	CreatedAt   time.Time         `json:"created_at"`
-	AllocatedAt *time.Time        `json:"allocated_at,omitempty"`
-	LastHealthy time.Time         `json:"last_healthy"`
+	SessionID    string            `json:"session_id,omitempty"`
+	CreatedAt    time.Time         `json:"created_at"`
+	AllocatedAt  *time.Time        `json:"allocated_at,omitempty"`
+	LastActivity time.Time         `json:"last_activity"`
+	LastHealthy  time.Time         `json:"last_healthy"`
 	HealthFails int               `json:"health_fails"`
 	Process     *android.EmulatorProcess `json:"-"`
 }
@@ -51,6 +52,24 @@ func (e *EmulatorInstance) SetSession(sessionID string) {
 	e.SessionID = sessionID
 	now := time.Now()
 	e.AllocatedAt = &now
+	e.LastActivity = now
+}
+
+// TouchActivity updates the last activity timestamp.
+func (e *EmulatorInstance) TouchActivity() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.LastActivity = time.Now()
+}
+
+// IdleSince returns how long since last activity.
+func (e *EmulatorInstance) IdleSince() time.Duration {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if e.LastActivity.IsZero() {
+		return time.Since(e.CreatedAt)
+	}
+	return time.Since(e.LastActivity)
 }
 
 // ClearSession removes session assignment.
@@ -85,35 +104,37 @@ func (e *EmulatorInstance) Snapshot() InstanceSnapshot {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return InstanceSnapshot{
-		ID:          e.ID,
-		AVDName:     e.AVDName,
-		ProfileName: e.ProfileName,
-		State:       e.State,
-		Serial:      e.Serial,
-		ConsolePort: e.Ports.Console,
-		ADBPort:     e.Ports.ADB,
-		SessionID:   e.SessionID,
-		CreatedAt:   e.CreatedAt,
-		AllocatedAt: e.AllocatedAt,
-		LastHealthy: e.LastHealthy,
-		HealthFails: e.HealthFails,
+		ID:           e.ID,
+		AVDName:      e.AVDName,
+		ProfileName:  e.ProfileName,
+		State:        e.State,
+		Serial:       e.Serial,
+		ConsolePort:  e.Ports.Console,
+		ADBPort:      e.Ports.ADB,
+		SessionID:    e.SessionID,
+		CreatedAt:    e.CreatedAt,
+		AllocatedAt:  e.AllocatedAt,
+		LastActivity: e.LastActivity,
+		LastHealthy:  e.LastHealthy,
+		HealthFails:  e.HealthFails,
 	}
 }
 
 // InstanceSnapshot is a read-only copy of instance state, safe for JSON serialization.
 type InstanceSnapshot struct {
-	ID          string        `json:"id"`
-	AVDName     string        `json:"avd_name"`
-	ProfileName string        `json:"profile"`
-	State       EmulatorState `json:"state"`
-	Serial      string        `json:"serial"`
-	ConsolePort int           `json:"console_port"`
-	ADBPort     int           `json:"adb_port"`
-	SessionID   string        `json:"session_id,omitempty"`
-	CreatedAt   time.Time     `json:"created_at"`
-	AllocatedAt *time.Time    `json:"allocated_at,omitempty"`
-	LastHealthy time.Time     `json:"last_healthy"`
-	HealthFails int           `json:"health_fails"`
+	ID           string        `json:"id"`
+	AVDName      string        `json:"avd_name"`
+	ProfileName  string        `json:"profile"`
+	State        EmulatorState `json:"state"`
+	Serial       string        `json:"serial"`
+	ConsolePort  int           `json:"console_port"`
+	ADBPort      int           `json:"adb_port"`
+	SessionID    string        `json:"session_id,omitempty"`
+	CreatedAt    time.Time     `json:"created_at"`
+	AllocatedAt  *time.Time    `json:"allocated_at,omitempty"`
+	LastActivity time.Time     `json:"last_activity"`
+	LastHealthy  time.Time     `json:"last_healthy"`
+	HealthFails  int           `json:"health_fails"`
 }
 
 // InvalidTransitionError indicates an invalid state transition attempt.

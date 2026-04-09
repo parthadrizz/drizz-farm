@@ -88,6 +88,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.Cleanup.DiskCleanupThresholdGB == 0 {
 		cfg.Cleanup.DiskCleanupThresholdGB = 20
 	}
+	if cfg.Cleanup.IdleTimeoutMinutes == 0 {
+		cfg.Cleanup.IdleTimeoutMinutes = 5
+	}
 
 	// Artifacts defaults
 	if cfg.Artifacts.StoragePath == "" {
