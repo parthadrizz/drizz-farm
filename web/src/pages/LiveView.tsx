@@ -129,10 +129,15 @@ export function LiveView() {
           <button onClick={() => sendInput('recent')} className="px-3 py-1 bg-gray-800 rounded text-[10px] hover:bg-gray-700">■ Recent</button>
           <button onClick={async () => {
             if (!id) return;
-            // Get all running app PIDs and kill them
-            const r = await api.execADB(id, "dumpsys activity recents | grep 'baseIntent' | sed 's/.*cmp=\\([^/]*\\).*/\\1/' | sort -u");
-            const pkgs = (r.output||'').split('\n').filter((l:string) => l.trim() && !l.includes('com.android.launcher') && !l.includes('com.google.android.apps.nexuslauncher'));
-            for (const pkg of pkgs) { await api.execADB(id, `am force-stop ${pkg.trim()}`); }
+            const r = await api.execADB(id, "dumpsys activity recents | grep realActivity");
+            const lines = (r.output||'').split('\n');
+            const pkgs = new Set<string>();
+            for (const line of lines) {
+              const m = line.match(/realActivity=\{?([^/}]+)/);
+              if (m) pkgs.add(m[1].trim());
+            }
+            const skip = ['com.google.android.apps.nexuslauncher','com.android.launcher3'];
+            for (const pkg of pkgs) { if (!skip.includes(pkg)) await api.execADB(id, `am force-stop ${pkg}`); }
           }} className="px-3 py-1 bg-red-900/50 text-red-400 rounded text-[10px] hover:bg-red-900/70">✕ Close All</button>
         </div>
       </div>

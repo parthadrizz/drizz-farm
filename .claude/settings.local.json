@@ -78,7 +78,8 @@
       "Bash(grep -l \"Live Grid\" /Users/humblefool2909/drizz-farm/web/dist/assets/*.js)",
       "Bash(rm -f ~/.drizz-farm/drizz-farm.pid)",
       "Bash(git commit -m 'fix: live view 60% smaller \\(180px wide\\):*)",
-      "Bash(python3 -c \"import json,sys; print\\(json.load\\(sys.stdin\\).get\\('output','none'\\)\\)\")"
+      "Bash(python3 -c \"import json,sys; print\\(json.load\\(sys.stdin\\).get\\('output','none'\\)\\)\")",
+      "Bash(python3 -c \"import json,sys; print\\(json.load\\(sys.stdin\\).get\\('output','EMPTY'\\)\\)\")"
     ]
   }
 }
