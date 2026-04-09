@@ -29,10 +29,6 @@ export function Dashboard() {
     setActionLoading(null);
   };
 
-  const handleAllocate = async (profile: string) => {
-    try { await api.createSession(profile || 'default'); refresh(); } catch (e: any) { alert(e.message); }
-  };
-
   const handleRelease = async (sessionId: string) => {
     try { await api.releaseSession(sessionId); refresh(); } catch (e: any) { alert(e.message); }
   };
@@ -117,10 +113,7 @@ export function Dashboard() {
                     <ActionBtn onClick={() => handleBoot(avdName)} loading={isLoading} color="emerald">Start</ActionBtn>
                   )}
                   {state === 'warm' && (
-                    <>
-                      <ActionBtn onClick={() => handleAllocate(inst?.profile || '')} color="blue">Allocate</ActionBtn>
-                      <ActionBtn onClick={() => inst && handleShutdown(inst)} loading={isLoading} color="red">Stop</ActionBtn>
-                    </>
+                    <ActionBtn onClick={() => inst && handleShutdown(inst)} loading={isLoading} color="red">Stop</ActionBtn>
                   )}
                   {state === 'allocated' && inst?.session_id && (
                     <ActionBtn onClick={() => handleRelease(inst.session_id!)} color="orange">Release</ActionBtn>
@@ -148,9 +141,6 @@ export function Dashboard() {
                 </div>
                 <StateBadge state={inst.state} />
                 <div className="flex gap-1.5">
-                  {inst.state === 'warm' && (
-                    <ActionBtn onClick={() => handleAllocate(inst.profile || '')} color="blue">Allocate</ActionBtn>
-                  )}
                   {inst.state === 'allocated' && inst.session_id && (
                     <ActionBtn onClick={() => handleRelease(inst.session_id!)} color="orange">Release</ActionBtn>
                   )}

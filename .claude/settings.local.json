@@ -52,7 +52,9 @@
       "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(f'{len\\(d[\\\\\"devices\\\\\"]\\)} devices'\\)\")",
       "Bash(npm run:*)",
       "Bash(curl -s http://127.0.0.1:9401/)",
-      "Bash(curl -s http://127.0.0.1:9401/create)"
+      "Bash(curl -s http://127.0.0.1:9401/create)",
+      "Bash(rm -rf ../internal/api/dashboard)",
+      "Bash(cp -r dist ../internal/api/dashboard)"
     ]
   }
 }
