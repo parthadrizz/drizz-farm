@@ -132,6 +132,21 @@ func APIGet(t *testing.T, path string) []byte {
 	return data
 }
 
+func APIPost(t *testing.T, path string, body string) []byte {
+	t.Helper()
+	var reader io.Reader
+	if body != "" {
+		reader = strings.NewReader(body)
+	}
+	resp, err := http.Post(apiBase+path, "application/json", reader)
+	if err != nil {
+		t.Fatalf("POST %s: %v", path, err)
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+	return data
+}
+
 func waitForAPI(timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {

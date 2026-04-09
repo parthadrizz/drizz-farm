@@ -4,15 +4,13 @@ package tests
 
 import (
 	"encoding/json"
-	"io"
 	"net/http"
-	"strings"
 	"testing"
 )
 
 func TestAPI_PoolBoot(t *testing.T) {
 	// Boot a specific AVD
-	resp := apiPost(t, "/pool/boot", `{"avd_name":"drizz_api34_ext8_play_0"}`)
+	resp := APIPost(t, "/pool/boot", `{"avd_name":"drizz_api34_ext8_play_0"}`)
 	var result map[string]any
 	json.Unmarshal(resp, &result)
 
@@ -111,14 +109,3 @@ func TestAPI_History_Events(t *testing.T) {
 	}
 }
 
-// Helper for POST
-func apiPost(t *testing.T, path string, body string) []byte {
-	t.Helper()
-	resp, err := http.Post(apiBase+path, "application/json", strings.NewReader(body))
-	if err != nil {
-		t.Fatalf("POST %s: %v", path, err)
-	}
-	defer resp.Body.Close()
-	data, _ := io.ReadAll(resp.Body)
-	return data
-}
