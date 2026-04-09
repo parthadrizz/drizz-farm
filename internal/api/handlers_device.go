@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -213,6 +214,145 @@ func (h *deviceHandlers) OpenDeeplink(w http.ResponseWriter, r *http.Request) {
 
 	h.adb.Shell(r.Context(), serial, fmt.Sprintf("am start -a android.intent.action.VIEW -d '%s'", req.URL))
 	JSON(w, 200, map[string]any{"status": "opened", "url": req.URL})
+}
+
+// PushFile handles POST /api/v1/sessions/:id/file/push
+func (h *deviceHandlers) PushFile(w http.ResponseWriter, r *http.Request) {
+	serial := h.findSerial(chi.URLParam(r, "id"))
+	if serial == "" { JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404}); return }
+	var req struct { LocalPath string `json:"local_path"`; DevicePath string `json:"device_path"` }
+	json.NewDecoder(r.Body).Decode(&req)
+	err := h.adb.Push(r.Context(), serial, req.LocalPath, req.DevicePath)
+	if err != nil { JSON(w, 500, ErrorResponse{Error: "push_failed", Message: err.Error(), Code: 500}); return }
+	JSON(w, 200, map[string]any{"status": "pushed", "device_path": req.DevicePath})
+}
+
+// PullFile handles POST /api/v1/sessions/:id/file/pull
+func (h *deviceHandlers) PullFile(w http.ResponseWriter, r *http.Request) {
+	serial := h.findSerial(chi.URLParam(r, "id"))
+	if serial == "" { JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404}); return }
+	var req struct { DevicePath string `json:"device_path"`; LocalPath string `json:"local_path"` }
+	json.NewDecoder(r.Body).Decode(&req)
+	err := h.adb.Pull(r.Context(), serial, req.DevicePath, req.LocalPath)
+	if err != nil { JSON(w, 500, ErrorResponse{Error: "pull_failed", Message: err.Error(), Code: 500}); return }
+	JSON(w, 200, map[string]any{"status": "pulled", "local_path": req.LocalPath})
+}
+
+// Biometric handles POST /api/v1/sessions/:id/biometric
+func (h *deviceHandlers) Biometric(w http.ResponseWriter, r *http.Request) {
+	serial := h.findSerial(chi.URLParam(r, "id"))
+	if serial == "" { JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404}); return }
+	var req struct { Action string `json:"action"` } // "touch" or "fail"
+	json.NewDecoder(r.Body).Decode(&req)
+	if req.Action == "fail" {
+		h.adb.EmuCommand(r.Context(), serial, "finger touch bad")
+	} else {
+		h.adb.EmuCommand(r.Context(), serial, "finger touch 1")
+	}
+	JSON(w, 200, map[string]any{"status": "triggered", "action": req.Action})
+}
+
+// CameraInject handles POST /api/v1/sessions/:id/camera
+func (h *deviceHandlers) CameraInject(w http.ResponseWriter, r *http.Request) {
+	serial := h.findSerial(chi.URLParam(r, "id"))
+	if serial == "" { JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404}); return }
+	var req struct { ImagePath string `json:"image_path"` }
+	json.NewDecoder(r.Body).Decode(&req)
+	// Push image to device and set as virtualscene
+	h.adb.Push(r.Context(), serial, req.ImagePath, "/sdcard/camera_inject.jpg")
+	JSON(w, 200, map[string]any{"status": "injected"})
+}
+
+// Permissions handles POST /api/v1/sessions/:id/permissions
+func (h *deviceHandlers) Permissions(w http.ResponseWriter, r *http.Request) {
+	serial := h.findSerial(chi.URLParam(r, "id"))
+	if serial == "" { JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404}); return }
+	var req struct { Package string `json:"package"`; Permission string `json:"permission"`; Grant bool `json:"grant"` }
+	json.NewDecoder(r.Body).Decode(&req)
+	action := "grant"
+	if !req.Grant { action = "revoke" }
+	h.adb.Shell(r.Context(), serial, fmt.Sprintf("pm %s %s %s", action, req.Package, req.Permission))
+	JSON(w, 200, map[string]any{"status": action, "package": req.Package, "permission": req.Permission})
+}
+
+// ClearData handles POST /api/v1/sessions/:id/clear-data
+func (h *deviceHandlers) ClearData(w http.ResponseWriter, r *http.Request) {
+	serial := h.findSerial(chi.URLParam(r, "id"))
+	if serial == "" { JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404}); return }
+	var req struct { Package string `json:"package"` }
+	json.NewDecoder(r.Body).Decode(&req)
+	h.adb.Shell(r.Context(), serial, fmt.Sprintf("pm clear %s", req.Package))
+	JSON(w, 200, map[string]any{"status": "cleared", "package": req.Package})
+}
+
+// UninstallApp handles POST /api/v1/sessions/:id/uninstall
+func (h *deviceHandlers) UninstallApp(w http.ResponseWriter, r *http.Request) {
+	serial := h.findSerial(chi.URLParam(r, "id"))
+	if serial == "" { JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404}); return }
+	var req struct { Package string `json:"package"` }
+	json.NewDecoder(r.Body).Decode(&req)
+	h.adb.Uninstall(r.Context(), serial, req.Package)
+	JSON(w, 200, map[string]any{"status": "uninstalled", "package": req.Package})
+}
+
+// SetTimezone handles POST /api/v1/sessions/:id/timezone
+func (h *deviceHandlers) SetTimezone(w http.ResponseWriter, r *http.Request) {
+	serial := h.findSerial(chi.URLParam(r, "id"))
+	if serial == "" { JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404}); return }
+	var req struct { Timezone string `json:"timezone"` } // e.g. "America/New_York"
+	json.NewDecoder(r.Body).Decode(&req)
+	h.adb.Shell(r.Context(), serial, fmt.Sprintf("setprop persist.sys.timezone %s", req.Timezone))
+	JSON(w, 200, map[string]any{"status": "set", "timezone": req.Timezone})
+}
+
+// PushNotification handles POST /api/v1/sessions/:id/push-notification
+func (h *deviceHandlers) PushNotification(w http.ResponseWriter, r *http.Request) {
+	serial := h.findSerial(chi.URLParam(r, "id"))
+	if serial == "" { JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404}); return }
+	var req struct { Package string `json:"package"`; Title string `json:"title"`; Body string `json:"body"` }
+	json.NewDecoder(r.Body).Decode(&req)
+	h.adb.Shell(r.Context(), serial, fmt.Sprintf("am broadcast -a com.android.test.NOTIFY --es title '%s' --es body '%s' -n %s/.NotificationReceiver", req.Title, req.Body, req.Package))
+	JSON(w, 200, map[string]any{"status": "sent"})
+}
+
+// Clipboard handles POST /api/v1/sessions/:id/clipboard
+func (h *deviceHandlers) Clipboard(w http.ResponseWriter, r *http.Request) {
+	serial := h.findSerial(chi.URLParam(r, "id"))
+	if serial == "" { JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404}); return }
+	var req struct { Text string `json:"text"` }
+	json.NewDecoder(r.Body).Decode(&req)
+	h.adb.Shell(r.Context(), serial, fmt.Sprintf("input text '%s'", req.Text))
+	JSON(w, 200, map[string]any{"status": "set"})
+}
+
+// FontScale handles POST /api/v1/sessions/:id/font-scale
+func (h *deviceHandlers) FontScale(w http.ResponseWriter, r *http.Request) {
+	serial := h.findSerial(chi.URLParam(r, "id"))
+	if serial == "" { JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404}); return }
+	var req struct { Scale float64 `json:"scale"` } // 0.85, 1.0, 1.15, 1.3
+	json.NewDecoder(r.Body).Decode(&req)
+	h.adb.Shell(r.Context(), serial, fmt.Sprintf("settings put system font_scale %.2f", req.Scale))
+	JSON(w, 200, map[string]any{"status": "set", "scale": req.Scale})
+}
+
+// Shake handles POST /api/v1/sessions/:id/shake
+func (h *deviceHandlers) Shake(w http.ResponseWriter, r *http.Request) {
+	serial := h.findSerial(chi.URLParam(r, "id"))
+	if serial == "" { JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404}); return }
+	h.adb.EmuCommand(r.Context(), serial, "sensor set acceleration 0:15:0")
+	time.Sleep(200 * time.Millisecond)
+	h.adb.EmuCommand(r.Context(), serial, "sensor set acceleration 0:0:9.8")
+	JSON(w, 200, map[string]any{"status": "shaken"})
+}
+
+// Sensor handles POST /api/v1/sessions/:id/sensor
+func (h *deviceHandlers) Sensor(w http.ResponseWriter, r *http.Request) {
+	serial := h.findSerial(chi.URLParam(r, "id"))
+	if serial == "" { JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404}); return }
+	var req struct { Name string `json:"name"`; Values string `json:"values"` } // name: acceleration, gyroscope, proximity
+	json.NewDecoder(r.Body).Decode(&req)
+	h.adb.EmuCommand(r.Context(), serial, fmt.Sprintf("sensor set %s %s", req.Name, req.Values))
+	JSON(w, 200, map[string]any{"status": "set", "sensor": req.Name})
 }
 
 // ExecADB handles POST /api/v1/sessions/:id/adb — raw ADB command
