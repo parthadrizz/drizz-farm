@@ -355,6 +355,148 @@ func (h *deviceHandlers) Sensor(w http.ResponseWriter, r *http.Request) {
 	JSON(w, 200, map[string]any{"status": "set", "sensor": req.Name})
 }
 
+// AudioInject handles POST /api/v1/sessions/:id/audio
+func (h *deviceHandlers) AudioInject(w http.ResponseWriter, r *http.Request) {
+	serial := h.findSerial(chi.URLParam(r, "id"))
+	if serial == "" { JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404}); return }
+	var req struct { FilePath string `json:"file_path"` }
+	json.NewDecoder(r.Body).Decode(&req)
+	h.adb.EmuCommand(r.Context(), serial, fmt.Sprintf("audio inject %s", req.FilePath))
+	JSON(w, 200, map[string]any{"status": "injected"})
+}
+
+// Volume handles POST /api/v1/sessions/:id/volume
+func (h *deviceHandlers) Volume(w http.ResponseWriter, r *http.Request) {
+	serial := h.findSerial(chi.URLParam(r, "id"))
+	if serial == "" { JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404}); return }
+	var req struct { Action string `json:"action"`; Level int `json:"level"` } // action: up, down, mute, set
+	json.NewDecoder(r.Body).Decode(&req)
+	switch req.Action {
+	case "up":
+		h.adb.Shell(r.Context(), serial, "input keyevent KEYCODE_VOLUME_UP")
+	case "down":
+		h.adb.Shell(r.Context(), serial, "input keyevent KEYCODE_VOLUME_DOWN")
+	case "mute":
+		h.adb.Shell(r.Context(), serial, "input keyevent KEYCODE_VOLUME_MUTE")
+	case "set":
+		h.adb.Shell(r.Context(), serial, fmt.Sprintf("media volume --stream 3 --set %d", req.Level))
+	}
+	JSON(w, 200, map[string]any{"status": "set", "action": req.Action})
+}
+
+// LockUnlock handles POST /api/v1/sessions/:id/lock
+func (h *deviceHandlers) LockUnlock(w http.ResponseWriter, r *http.Request) {
+	serial := h.findSerial(chi.URLParam(r, "id"))
+	if serial == "" { JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404}); return }
+	var req struct { Lock bool `json:"lock"` }
+	json.NewDecoder(r.Body).Decode(&req)
+	if req.Lock {
+		h.adb.Shell(r.Context(), serial, "input keyevent KEYCODE_SLEEP")
+	} else {
+		h.adb.Shell(r.Context(), serial, "input keyevent KEYCODE_WAKEUP")
+		time.Sleep(300 * time.Millisecond)
+		h.adb.Shell(r.Context(), serial, "input swipe 540 1800 540 800 300") // swipe up to unlock
+	}
+	JSON(w, 200, map[string]any{"status": "set", "locked": req.Lock})
+}
+
+// Animations handles POST /api/v1/sessions/:id/animations
+func (h *deviceHandlers) Animations(w http.ResponseWriter, r *http.Request) {
+	serial := h.findSerial(chi.URLParam(r, "id"))
+	if serial == "" { JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404}); return }
+	var req struct { Enabled bool `json:"enabled"` }
+	json.NewDecoder(r.Body).Decode(&req)
+	scale := "1.0"
+	if !req.Enabled { scale = "0.0" }
+	h.adb.Shell(r.Context(), serial, fmt.Sprintf("settings put global window_animation_scale %s", scale))
+	h.adb.Shell(r.Context(), serial, fmt.Sprintf("settings put global transition_animation_scale %s", scale))
+	h.adb.Shell(r.Context(), serial, fmt.Sprintf("settings put global animator_duration_scale %s", scale))
+	JSON(w, 200, map[string]any{"status": "set", "enabled": req.Enabled})
+}
+
+// GPSRoute handles POST /api/v1/sessions/:id/gps-route — simulate movement
+func (h *deviceHandlers) GPSRoute(w http.ResponseWriter, r *http.Request) {
+	serial := h.findSerial(chi.URLParam(r, "id"))
+	if serial == "" { JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404}); return }
+	var req struct {
+		Points []struct { Lat float64 `json:"lat"`; Lng float64 `json:"lng"` } `json:"points"`
+		DelayMS int `json:"delay_ms"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+	if req.DelayMS == 0 { req.DelayMS = 1000 }
+
+	// Run route in background
+	go func() {
+		for _, pt := range req.Points {
+			h.adb.EmuCommand(r.Context(), serial, fmt.Sprintf("geo fix %f %f", pt.Lng, pt.Lat))
+			time.Sleep(time.Duration(req.DelayMS) * time.Millisecond)
+		}
+	}()
+
+	JSON(w, 200, map[string]any{"status": "started", "points": len(req.Points), "delay_ms": req.DelayMS})
+}
+
+// Accessibility handles POST /api/v1/sessions/:id/accessibility
+func (h *deviceHandlers) Accessibility(w http.ResponseWriter, r *http.Request) {
+	serial := h.findSerial(chi.URLParam(r, "id"))
+	if serial == "" { JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404}); return }
+	var req struct { TalkBack bool `json:"talkback"` }
+	json.NewDecoder(r.Body).Decode(&req)
+	if req.TalkBack {
+		h.adb.Shell(r.Context(), serial, "settings put secure enabled_accessibility_services com.google.android.marvin.talkback/com.google.android.marvin.talkback.TalkBackService")
+		h.adb.Shell(r.Context(), serial, "settings put secure accessibility_enabled 1")
+	} else {
+		h.adb.Shell(r.Context(), serial, "settings put secure enabled_accessibility_services \"\"")
+		h.adb.Shell(r.Context(), serial, "settings put secure accessibility_enabled 0")
+	}
+	JSON(w, 200, map[string]any{"status": "set", "talkback": req.TalkBack})
+}
+
+// Brightness handles POST /api/v1/sessions/:id/brightness
+func (h *deviceHandlers) Brightness(w http.ResponseWriter, r *http.Request) {
+	serial := h.findSerial(chi.URLParam(r, "id"))
+	if serial == "" { JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404}); return }
+	var req struct { Level int `json:"level"` } // 0-255
+	json.NewDecoder(r.Body).Decode(&req)
+	h.adb.Shell(r.Context(), serial, "settings put system screen_brightness_mode 0") // manual
+	h.adb.Shell(r.Context(), serial, fmt.Sprintf("settings put system screen_brightness %d", req.Level))
+	JSON(w, 200, map[string]any{"status": "set", "level": req.Level})
+}
+
+// WifiToggle handles POST /api/v1/sessions/:id/wifi
+func (h *deviceHandlers) WifiToggle(w http.ResponseWriter, r *http.Request) {
+	serial := h.findSerial(chi.URLParam(r, "id"))
+	if serial == "" { JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404}); return }
+	var req struct { Enabled bool `json:"enabled"` }
+	json.NewDecoder(r.Body).Decode(&req)
+	if req.Enabled {
+		h.adb.Shell(r.Context(), serial, "svc wifi enable")
+	} else {
+		h.adb.Shell(r.Context(), serial, "svc wifi disable")
+	}
+	JSON(w, 200, map[string]any{"status": "set", "wifi": req.Enabled})
+}
+
+// LaunchApp handles POST /api/v1/sessions/:id/launch
+func (h *deviceHandlers) LaunchApp(w http.ResponseWriter, r *http.Request) {
+	serial := h.findSerial(chi.URLParam(r, "id"))
+	if serial == "" { JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404}); return }
+	var req struct { Package string `json:"package"` }
+	json.NewDecoder(r.Body).Decode(&req)
+	h.adb.Shell(r.Context(), serial, fmt.Sprintf("monkey -p %s -c android.intent.category.LAUNCHER 1", req.Package))
+	JSON(w, 200, map[string]any{"status": "launched", "package": req.Package})
+}
+
+// ForceStop handles POST /api/v1/sessions/:id/force-stop
+func (h *deviceHandlers) ForceStop(w http.ResponseWriter, r *http.Request) {
+	serial := h.findSerial(chi.URLParam(r, "id"))
+	if serial == "" { JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404}); return }
+	var req struct { Package string `json:"package"` }
+	json.NewDecoder(r.Body).Decode(&req)
+	h.adb.Shell(r.Context(), serial, fmt.Sprintf("am force-stop %s", req.Package))
+	JSON(w, 200, map[string]any{"status": "stopped", "package": req.Package})
+}
+
 // ExecADB handles POST /api/v1/sessions/:id/adb — raw ADB command
 func (h *deviceHandlers) ExecADB(w http.ResponseWriter, r *http.Request) {
 	serial := h.findSerial(chi.URLParam(r, "id"))

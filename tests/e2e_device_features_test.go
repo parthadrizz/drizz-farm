@@ -124,6 +124,54 @@ func TestE2E_AllDeviceFeatures(t *testing.T) {
 	t.Log("--- Clipboard ---")
 	run("Clipboard: Set text", "clipboard", `{"text":"hello drizz-farm"}`, "status")
 
+	// Volume
+	t.Log("--- Volume ---")
+	run("Volume: Up", "volume", `{"action":"up"}`, "status")
+	run("Volume: Down", "volume", `{"action":"down"}`, "status")
+	run("Volume: Set 10", "volume", `{"action":"set","level":10}`, "status")
+	run("Volume: Mute", "volume", `{"action":"mute"}`, "status")
+
+	// Lock/Unlock
+	t.Log("--- Lock/Unlock ---")
+	run("Lock screen", "lock", `{"lock":true}`, "status")
+	time.Sleep(500 * time.Millisecond)
+	run("Unlock screen", "lock", `{"lock":false}`, "status")
+	time.Sleep(500 * time.Millisecond)
+
+	// Animations
+	t.Log("--- Animations ---")
+	run("Disable animations", "animations", `{"enabled":false}`, "status")
+	run("Enable animations", "animations", `{"enabled":true}`, "status")
+
+	// Accessibility
+	t.Log("--- Accessibility ---")
+	run("TalkBack: On", "accessibility", `{"talkback":true}`, "status")
+	run("TalkBack: Off", "accessibility", `{"talkback":false}`, "status")
+
+	// Brightness
+	t.Log("--- Brightness ---")
+	run("Brightness: 50", "brightness", `{"level":50}`, "status")
+	run("Brightness: 200", "brightness", `{"level":200}`, "status")
+
+	// WiFi
+	t.Log("--- WiFi ---")
+	run("WiFi: Off", "wifi", `{"enabled":false}`, "status")
+	run("WiFi: On", "wifi", `{"enabled":true}`, "status")
+
+	// App Lifecycle
+	t.Log("--- App Lifecycle ---")
+	run("Launch: Settings", "launch", `{"package":"com.android.settings"}`, "status")
+	time.Sleep(1 * time.Second)
+	run("Force-stop: Settings", "force-stop", `{"package":"com.android.settings"}`, "status")
+
+	// GPS Route
+	t.Log("--- GPS Route ---")
+	run("GPS Route: 3 points", "gps-route", `{"points":[{"lat":37.77,"lng":-122.41},{"lat":37.78,"lng":-122.42},{"lat":37.79,"lng":-122.43}],"delay_ms":500}`, "status")
+
+	// Audio
+	t.Log("--- Audio ---")
+	run("Audio inject", "audio", `{"file_path":"/sdcard/test.wav"}`, "status")
+
 	// ADB Shell
 	t.Log("--- ADB Shell ---")
 	run("ADB: getprop model", "adb", `{"command":"getprop ro.product.model"}`, "output")

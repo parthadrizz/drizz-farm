@@ -85,6 +85,16 @@ func RegisterRoutes(r chi.Router, cfg *config.Config, p *pool.Pool, b *session.B
 		r.Post("/sessions/{id}/font-scale", devH.FontScale)
 		r.Post("/sessions/{id}/shake", devH.Shake)
 		r.Post("/sessions/{id}/sensor", devH.Sensor)
+		r.Post("/sessions/{id}/audio", devH.AudioInject)
+		r.Post("/sessions/{id}/volume", devH.Volume)
+		r.Post("/sessions/{id}/lock", devH.LockUnlock)
+		r.Post("/sessions/{id}/animations", devH.Animations)
+		r.Post("/sessions/{id}/gps-route", devH.GPSRoute)
+		r.Post("/sessions/{id}/accessibility", devH.Accessibility)
+		r.Post("/sessions/{id}/brightness", devH.Brightness)
+		r.Post("/sessions/{id}/wifi", devH.WifiToggle)
+		r.Post("/sessions/{id}/launch", devH.LaunchApp)
+		r.Post("/sessions/{id}/force-stop", devH.ForceStop)
 		r.Post("/sessions/{id}/adb", devH.ExecADB)
 
 		// Recording + Artifacts
