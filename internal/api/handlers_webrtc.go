@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/pion/interceptor"
+	"github.com/pion/interceptor/pkg/intervalpli"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
 	"github.com/rs/zerolog/log"
@@ -43,14 +45,36 @@ func (h *webrtcHandlers) Offer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create WebRTC peer connection
+	// Register H.264 codec with proper parameters
+	m := &webrtc.MediaEngine{}
+	if err := m.RegisterCodec(webrtc.RTPCodecParameters{
+		RTPCodecCapability: webrtc.RTPCodecCapability{
+			MimeType:    "video/H264",
+			ClockRate:   90000,
+			SDPFmtpLine: "packetization-mode=1;profile-level-id=42e01f;level-asymmetry-allowed=1",
+		},
+		PayloadType: 102,
+	}, webrtc.RTPCodecTypeVideo); err != nil {
+		JSON(w, 500, ErrorResponse{Error: "codec_failed", Message: err.Error(), Code: 500})
+		return
+	}
+
+	// Add PLI interceptor — sends periodic keyframe requests
+	ir := &interceptor.Registry{}
+	pliFactory, _ := intervalpli.NewReceiverInterceptor(intervalpli.GeneratorInterval(2 * time.Second))
+	if pliFactory != nil {
+		ir.Add(pliFactory)
+	}
+
+	api := webrtc.NewAPI(webrtc.WithMediaEngine(m), webrtc.WithInterceptorRegistry(ir))
+
 	config := webrtc.Configuration{
 		ICEServers: []webrtc.ICEServer{
 			{URLs: []string{"stun:stun.l.google.com:19302"}},
 		},
 	}
 
-	pc, err := webrtc.NewPeerConnection(config)
+	pc, err := api.NewPeerConnection(config)
 	if err != nil {
 		JSON(w, 500, ErrorResponse{Error: "webrtc_failed", Message: err.Error(), Code: 500})
 		return
