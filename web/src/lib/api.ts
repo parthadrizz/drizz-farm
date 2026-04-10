@@ -119,6 +119,18 @@ export const api = {
   startHAR: (id: string) => fetchJSON<any>(`/sessions/${id}/har/start`, { method: 'POST' }),
   stopHAR: (id: string) => fetchJSON<any>(`/sessions/${id}/har/stop`, { method: 'POST' }),
 
+  // Federation
+  federationStatus: () => fetchJSON<any>('/federation/status'),
+  federationPeers: () => fetchJSON<any>('/federation/peers'),
+  remotePool: (node: string) => fetchJSON<any>(`/federation/nodes/${node}/pool`),
+  remoteAVDs: (node: string) => fetchJSON<any>(`/federation/nodes/${node}/avds`),
+  remoteCreateAVDs: (node: string, data: any) =>
+    fetchJSON<any>(`/federation/nodes/${node}/create-avds`, { method: 'POST', body: JSON.stringify(data) }),
+  remoteBoot: (node: string, avdName: string) =>
+    fetchJSON<any>(`/federation/nodes/${node}/boot`, { method: 'POST', body: JSON.stringify({ avd_name: avdName }) }),
+  remoteShutdown: (node: string, instanceId: string) =>
+    fetchJSON<any>(`/federation/nodes/${node}/shutdown`, { method: 'POST', body: JSON.stringify({ instance_id: instanceId }) }),
+
   // Discovery
   systemImages: () => fetchJSON<{ images: SystemImage[] }>('/discovery/system-images'),
   availableImages: () => fetchJSON<{ images: SystemImage[] }>('/discovery/available-images'),
