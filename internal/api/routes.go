@@ -45,6 +45,7 @@ func RegisterRoutes(r chi.Router, cfg *config.Config, p *pool.Pool, b *session.B
 		pool: p,
 		adb:  android.NewADBClient(deps.SDK, deps.Runner),
 	}
+	screenV2H := newScreenV2Handlers(p, android.NewADBClient(deps.SDK, deps.Runner), deps.SDK)
 
 	r.Route("/api/v1", func(r chi.Router) {
 		// Sessions
@@ -63,7 +64,8 @@ func RegisterRoutes(r chi.Router, cfg *config.Config, p *pool.Pool, b *session.B
 		r.Get("/node/health", nodeH.Health)
 
 		// Screen streaming + input (WebSocket)
-		r.Get("/sessions/{id}/screen", screenH.StreamScreen)
+		r.Get("/sessions/{id}/screen", screenV2H.StreamScreen)  // H.264 via scrcpy or screenrecord
+		r.Get("/sessions/{id}/screen-legacy", screenH.StreamScreen) // PNG fallback
 		r.Get("/sessions/{id}/input", screenH.SendInput)
 		r.Get("/sessions/{id}/logcat", screenH.StreamLogcat)
 

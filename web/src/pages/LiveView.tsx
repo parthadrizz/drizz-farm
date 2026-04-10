@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api, DeviceInstance } from '../lib/api';
+import JMuxer from 'jmuxer';
 
 type Tab = 'device' | 'input' | 'apps' | 'capture' | 'debug';
 
@@ -32,7 +33,11 @@ export function LiveView() {
 
   useEffect(() => { api.pool().then(p => { const inst = p.instances.find((i: DeviceInstance) => i.id === id || i.session_id === id); if (inst) setInstance(inst); }); }, [id]);
 
-  // Screen WebSocket
+  // Screen WebSocket — supports H.264 (via jmuxer) and PNG fallback
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const jmuxerRef = useRef<JMuxer | null>(null);
+  const [codec, setCodec] = useState<'h264' | 'png' | null>(null);
+
   useEffect(() => {
     if (!id) return;
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -41,16 +46,48 @@ export function LiveView() {
     wsRef.current = ws;
     ws.onopen = () => setConnected(true);
     ws.onclose = () => setConnected(false);
+
     ws.onmessage = (event) => {
+      // First message is text with codec info
+      if (typeof event.data === 'string') {
+        try {
+          const info = JSON.parse(event.data);
+          setCodec(info.codec);
+          if (info.codec === 'h264' && videoRef.current) {
+            // Init jmuxer for H.264 decode
+            jmuxerRef.current = new JMuxer({
+              node: videoRef.current,
+              mode: 'video',
+              fps: 30,
+              flushingTime: 0,
+              debug: false,
+            });
+          }
+        } catch {}
+        return;
+      }
+
       frameCount.current++;
-      const blob = new Blob([event.data], { type: 'image/png' });
-      const url = URL.createObjectURL(blob);
-      const img = new Image();
-      img.onload = () => { const c = canvasRef.current; if (!c) return; c.width = img.width; c.height = img.height; c.getContext('2d')?.drawImage(img, 0, 0); URL.revokeObjectURL(url); };
-      img.src = url;
+
+      if (codec === 'h264' && jmuxerRef.current) {
+        // Feed H.264 NAL units to jmuxer
+        jmuxerRef.current.feed({ video: new Uint8Array(event.data) });
+      } else {
+        // PNG fallback — render to canvas
+        const blob = new Blob([event.data], { type: 'image/png' });
+        const url = URL.createObjectURL(blob);
+        const img = new Image();
+        img.onload = () => { const c = canvasRef.current; if (!c) return; c.width = img.width; c.height = img.height; c.getContext('2d')?.drawImage(img, 0, 0); URL.revokeObjectURL(url); };
+        img.src = url;
+      }
     };
-    return () => ws.close();
-  }, [id]);
+
+    return () => {
+      ws.close();
+      jmuxerRef.current?.destroy();
+      jmuxerRef.current = null;
+    };
+  }, [id, codec]);
 
   // Input WebSocket
   useEffect(() => {
@@ -69,11 +106,15 @@ export function LiveView() {
 
   // Gestures
   const dragStart = useRef<{ x: number; y: number; time: number } | null>(null);
-  const canvasCoords = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    const c = canvasRef.current; if (!c) return { x: 0, y: 0 };
-    const r = c.getBoundingClientRect();
-    return { x: Math.round((e.clientX - r.left) * c.width / r.width), y: Math.round((e.clientY - r.top) * c.height / r.height) };
-  }, []);
+  const canvasCoords = useCallback((e: React.MouseEvent<HTMLCanvasElement | HTMLVideoElement>) => {
+    const el = (codec === 'h264' ? videoRef.current : canvasRef.current) as HTMLElement;
+    if (!el) return { x: 0, y: 0 };
+    const r = el.getBoundingClientRect();
+    // Map display coords to device coords (720x1600 for scrcpy, 1080x2400 for screencap)
+    const deviceW = codec === 'h264' ? 720 : 1080;
+    const deviceH = codec === 'h264' ? 1600 : 2400;
+    return { x: Math.round((e.clientX - r.left) / r.width * deviceW), y: Math.round((e.clientY - r.top) / r.height * deviceH) };
+  }, [codec]);
   const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => { dragStart.current = { ...canvasCoords(e), time: Date.now() }; }, [canvasCoords]);
   const handleMouseUp = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!dragStart.current) return;
@@ -127,6 +168,10 @@ export function LiveView() {
         <div className="bg-gray-900 border border-gray-800 rounded-lg p-1 inline-block">
           {!connected ? (
             <div className="w-[240px] h-[533px] flex items-center justify-center"><div className="animate-spin w-5 h-5 border-2 border-gray-600 border-t-emerald-400 rounded-full" /></div>
+          ) : codec === 'h264' ? (
+            <video ref={videoRef} autoPlay muted playsInline
+              onMouseDown={handleMouseDown as any} onMouseUp={handleMouseUp as any} onMouseLeave={handleMouseLeave as any}
+              className="w-[240px] h-[533px] cursor-crosshair rounded select-none object-cover" />
           ) : (
             <canvas ref={canvasRef} onMouseDown={handleMouseDown} onMouseUp={handleMouseUp} onMouseLeave={handleMouseLeave}
               className="w-[240px] h-[533px] cursor-crosshair rounded select-none" style={{ imageRendering: 'auto' }} />

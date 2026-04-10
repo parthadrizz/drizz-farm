@@ -103,7 +103,9 @@
       "Bash(git commit -m 'fix: unused nodeAddr parameter:*)",
       "Bash(git commit -m 'fix: input WS connection tracking, debug logging for swipe/keyboard issues:*)",
       "Bash(git commit -m 'fix: swipe right/left — handle mouse leaving canvas, increase tap threshold:*)",
-      "Bash(git commit -m 'fix: remove unused exec helper:*)"
+      "Bash(git commit -m 'fix: remove unused exec helper:*)",
+      "Bash(scrcpy --version)",
+      "Bash(ffmpeg -version)"
     ]
   }
 }
