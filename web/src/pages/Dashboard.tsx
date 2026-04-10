@@ -199,7 +199,7 @@ export function Dashboard() {
 
 function NodeDeviceList({
   title, subtitle, avds, poolByName, instances, actionLoading,
-  onBoot, onShutdown, onRelease, onView, isRemote, nodeAddr
+  onBoot, onShutdown, onRelease, onView, isRemote, nodeAddr: _nodeAddr
 }: {
   title: string; subtitle: string;
   avds: string[]; poolByName: Map<string, DeviceInstance>; instances: DeviceInstance[];

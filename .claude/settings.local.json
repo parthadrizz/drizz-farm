@@ -98,7 +98,9 @@
       "Bash(npx appium:*)",
       "Bash(export PATH=\"/opt/homebrew/opt/node@22/bin:$PATH\")",
       "Bash(appium --version)",
-      "Bash(appium driver:*)"
+      "Bash(appium driver:*)",
+      "Bash(make build:*)",
+      "Bash(git commit -m 'fix: unused nodeAddr parameter:*)"
     ]
   }
 }
