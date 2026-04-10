@@ -101,6 +101,11 @@ func (d *RunningEmulatorDevice) Reset(ctx context.Context) error {
 }
 
 func (d *RunningEmulatorDevice) Shutdown(ctx context.Context) error {
+	// Clean up scrcpy/screenrecord processes and ADB forwards before killing
+	d.adb.Shell(ctx, d.serial, "pkill -f scrcpy")
+	d.adb.Shell(ctx, d.serial, "pkill screenrecord")
+	d.adb.ForwardRemoveAll(ctx, d.serial)
+
 	// Kill the emulator
 	d.adb.EmuCommand(ctx, d.serial, "kill")
 	return nil

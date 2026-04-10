@@ -1,19 +1,27 @@
 package api
 
 import (
+	"bufio"
 	"context"
+	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"os"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/pion/interceptor"
 	"github.com/pion/interceptor/pkg/intervalpli"
+	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
+	"github.com/pion/webrtc/v4/pkg/media/h264reader"
 	"github.com/rs/zerolog/log"
 
 	"github.com/drizz-dev/drizz-farm/internal/android"
@@ -43,19 +51,19 @@ func (h *webrtcHandlers) Offer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Register H.264 codec
+	// Use default codecs (H264 + VP8 + VP9 + Opus etc.) — lets browser negotiate
 	m := &webrtc.MediaEngine{}
-	m.RegisterCodec(webrtc.RTPCodecParameters{
-		RTPCodecCapability: webrtc.RTPCodecCapability{
-			MimeType:    "video/H264",
-			ClockRate:   90000,
-			SDPFmtpLine: "packetization-mode=1;profile-level-id=42e01f;level-asymmetry-allowed=1",
-		},
-		PayloadType: 102,
-	}, webrtc.RTPCodecTypeVideo)
+	if err := m.RegisterDefaultCodecs(); err != nil {
+		JSON(w, 500, ErrorResponse{Error: "codec_init", Message: err.Error(), Code: 500})
+		return
+	}
 
-	// PLI interceptor
+	// Default interceptors (NACK, RTCP reports) + PLI
 	ir := &interceptor.Registry{}
+	if err := webrtc.RegisterDefaultInterceptors(m, ir); err != nil {
+		JSON(w, 500, ErrorResponse{Error: "interceptor_init", Message: err.Error(), Code: 500})
+		return
+	}
 	pliFactory, _ := intervalpli.NewReceiverInterceptor(intervalpli.GeneratorInterval(2 * time.Second))
 	if pliFactory != nil {
 		ir.Add(pliFactory)
@@ -74,7 +82,7 @@ func (h *webrtcHandlers) Offer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	videoTrack, err := webrtc.NewTrackLocalStaticSample(
-		webrtc.RTPCodecCapability{MimeType: "video/H264"},
+		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264},
 		"video", "drizz-farm",
 	)
 	if err != nil {
@@ -90,17 +98,31 @@ func (h *webrtcHandlers) Offer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Read RTCP
+	// PLI channel — browser requests keyframe
+	pliCh := make(chan struct{}, 1)
+
+	// Read RTCP, detect PLI/FIR
 	go func() {
 		buf := make([]byte, 1500)
 		for {
-			if _, _, err := rtpSender.Read(buf); err != nil {
+			n, _, err := rtpSender.Read(buf)
+			if err != nil {
 				return
+			}
+			pkts, _ := rtcp.Unmarshal(buf[:n])
+			for _, pkt := range pkts {
+				switch pkt.(type) {
+				case *rtcp.PictureLossIndication, *rtcp.FullIntraRequest:
+					select {
+					case pliCh <- struct{}{}:
+					default:
+					}
+				}
 			}
 		}
 	}()
 
-	// Set offer
+	// Set remote offer
 	if err := pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: req.SDP}); err != nil {
 		pc.Close()
 		JSON(w, 500, ErrorResponse{Error: "set_offer", Message: err.Error(), Code: 500})
@@ -120,18 +142,32 @@ func (h *webrtcHandlers) Offer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Wait for ICE
+	// Wait for ICE gathering
 	<-webrtc.GatheringCompletePromise(pc)
 
-	// Start H.264 streaming
-	go h.streamH264(pc, videoTrack, serial)
+	// Single OnConnectionStateChange — handles both logging and lifecycle
+	connectedCh := make(chan struct{}, 1)
+	ctx, cancel := context.WithCancel(context.Background())
 
 	pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
 		log.Info().Str("state", state.String()).Str("serial", serial).Msg("webrtc: state")
-		if state == webrtc.PeerConnectionStateClosed || state == webrtc.PeerConnectionStateFailed {
+		switch state {
+		case webrtc.PeerConnectionStateConnected:
+			select {
+			case connectedCh <- struct{}{}:
+			default:
+			}
+		case webrtc.PeerConnectionStateFailed, webrtc.PeerConnectionStateClosed:
+			cancel()
 			pc.Close()
+		case webrtc.PeerConnectionStateDisconnected:
+			// Temporary — ICE can recover. Don't kill the stream.
+			log.Warn().Str("serial", serial).Msg("webrtc: ICE disconnected (may recover)")
 		}
 	})
+
+	// Start streaming — waits for connection before sending frames
+	go h.streamH264(ctx, cancel, videoTrack, serial, pliCh, connectedCh)
 
 	JSON(w, 200, map[string]string{
 		"sdp":  pc.LocalDescription().SDP,
@@ -139,19 +175,21 @@ func (h *webrtcHandlers) Offer(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (h *webrtcHandlers) streamH264(pc *webrtc.PeerConnection, track *webrtc.TrackLocalStaticSample, serial string) {
-	ctx, cancel := context.WithCancel(context.Background())
+func (h *webrtcHandlers) streamH264(ctx context.Context, cancel context.CancelFunc, track *webrtc.TrackLocalStaticSample, serial string, pliCh <-chan struct{}, connectedCh <-chan struct{}) {
 	defer cancel()
 
-	pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
-		if state == webrtc.PeerConnectionStateClosed || state == webrtc.PeerConnectionStateFailed || state == webrtc.PeerConnectionStateDisconnected {
-			cancel()
-		}
-	})
+	// Wait for WebRTC connection
+	select {
+	case <-connectedCh:
+		log.Info().Str("serial", serial).Msg("webrtc: connection ready, starting stream")
+	case <-ctx.Done():
+		return
+	case <-time.After(30 * time.Second):
+		log.Warn().Str("serial", serial).Msg("webrtc: connection timeout")
+		return
+	}
 
-	// Cache SPS/PPS for resending on PLI
-	var cachedSPS, cachedPPS []byte
-
+	// Try scrcpy in a loop (restart on crash/timeout)
 	for {
 		select {
 		case <-ctx.Done():
@@ -159,20 +197,223 @@ func (h *webrtcHandlers) streamH264(pc *webrtc.PeerConnection, track *webrtc.Tra
 		default:
 		}
 
+		if h.streamViaScrcpy(ctx, track, serial, pliCh) {
+			// scrcpy worked but stream ended — restart
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				log.Info().Str("serial", serial).Msg("webrtc: scrcpy ended, restarting in 1s")
+				time.Sleep(1 * time.Second)
+				continue
+			}
+		}
+
+		// scrcpy failed to start — fall back to screenrecord
+		log.Info().Str("serial", serial).Msg("webrtc: scrcpy unavailable, falling back to screenrecord")
+		h.streamViaScreenrecord(ctx, track, serial, pliCh)
+		return
+	}
+}
+
+// readScrcpyStream parses scrcpy's length-prefixed H.264 stream (no start codes).
+// SPS/PPS are sent as zero-duration samples before the next VCL or after a PLI.
+func (h *webrtcHandlers) readScrcpyStream(ctx context.Context, conn net.Conn, track *webrtc.TrackLocalStaticSample, pliCh <-chan struct{}) {
+	reader := bufio.NewReader(conn)
+
+	var sps, pps []byte
+	var needConfig atomic.Bool
+	needConfig.Store(true)
+	frameCount := 0
+	frameDuration := 33 * time.Millisecond
+
+	for {
+		// Handle cancellation / PLI
+		select {
+		case <-ctx.Done():
+			return
+		case <-pliCh:
+			needConfig.Store(true)
+		default:
+		}
+
+		// Read length prefix
+		lenBuf := make([]byte, 4)
+		if _, err := io.ReadFull(reader, lenBuf); err != nil {
+			return
+		}
+		n := binary.BigEndian.Uint32(lenBuf)
+		if n == 0 {
+			continue
+		}
+
+		nal := make([]byte, n)
+		if _, err := io.ReadFull(reader, nal); err != nil {
+			return
+		}
+		if len(nal) == 0 {
+			continue
+		}
+
+		nalType := nal[0] & 0x1F
+
+		switch nalType {
+		case 7: // SPS
+			sps = append([]byte{}, nal...)
+			continue
+		case 8: // PPS
+			pps = append([]byte{}, nal...)
+			continue
+		case 6, 9: // SEI, AUD
+			continue
+		}
+
+		// Send SPS/PPS if needed (PLI or before keyframe)
+		if needConfig.Load() && sps != nil && pps != nil && (nalType == 5 || nalType == 1) {
+			if err := track.WriteSample(media.Sample{Data: sps, Duration: 0}); err != nil {
+				return
+			}
+			if err := track.WriteSample(media.Sample{Data: pps, Duration: 0}); err != nil {
+				return
+			}
+			needConfig.Store(false)
+		}
+
+		// Send VCL
+		if nalType == 5 || nalType == 1 {
+			if err := track.WriteSample(media.Sample{Data: nal, Duration: frameDuration}); err != nil {
+				return
+			}
+			frameCount++
+			if frameCount == 1 && nalType == 5 {
+				log.Info().Int("sps_len", len(sps)).Int("pps_len", len(pps)).Int("idr_len", len(nal)).Msg("webrtc: scrcpy first frame")
+			}
+			continue
+		}
+	}
+}
+
+// streamViaScrcpy pushes scrcpy-server to device and reads H.264 over TCP.
+// Continuous capture — no stalls on static screens.
+func (h *webrtcHandlers) streamViaScrcpy(ctx context.Context, track *webrtc.TrackLocalStaticSample, serial string, pliCh <-chan struct{}) bool {
+	// Find scrcpy-server
+	scrcpyPath := ""
+	for _, p := range []string{
+		"/opt/homebrew/Cellar/scrcpy/3.2/share/scrcpy/scrcpy-server",
+		"/opt/homebrew/share/scrcpy/scrcpy-server",
+		"/usr/local/share/scrcpy/scrcpy-server",
+		"/usr/share/scrcpy/scrcpy-server",
+	} {
+		if _, err := os.Stat(p); err == nil {
+			scrcpyPath = p
+			break
+		}
+	}
+	if scrcpyPath == "" {
+		log.Debug().Msg("webrtc: scrcpy-server not found")
+		return false
+	}
+
+	// Push server to device
+	pushCmd := exec.CommandContext(ctx, h.sdk.ADBPath(), "-s", serial, "push", scrcpyPath, "/data/local/tmp/scrcpy-server.jar")
+	if err := pushCmd.Run(); err != nil {
+		log.Warn().Err(err).Msg("webrtc: scrcpy push failed")
+		return false
+	}
+
+	// Find free port and forward
+	port, err := getFreePort()
+	if err != nil {
+		return false
+	}
+
+	fwdCmd := exec.CommandContext(ctx, h.sdk.ADBPath(), "-s", serial, "forward", fmt.Sprintf("tcp:%d", port), "localabstract:scrcpy")
+	if err := fwdCmd.Run(); err != nil {
+		log.Warn().Err(err).Msg("webrtc: scrcpy forward failed")
+		return false
+	}
+	defer exec.Command(h.sdk.ADBPath(), "-s", serial, "forward", "--remove", fmt.Sprintf("tcp:%d", port)).Run()
+
+	// Start scrcpy-server on device
+	serverCmd := exec.CommandContext(ctx, h.sdk.ADBPath(), "-s", serial, "shell",
+		"CLASSPATH=/data/local/tmp/scrcpy-server.jar",
+		"app_process", "/", "com.genymobile.scrcpy.Server",
+		"3.2",
+		"tunnel_forward=true",
+		"video=true", "audio=false", "control=false",
+		"max_size=0", "video_bit_rate=3000000", "max_fps=10",
+		"video_codec=h264", "send_frame_meta=false",
+		"send_device_meta=false", "send_dummy_byte=false",
+	)
+	if err := serverCmd.Start(); err != nil {
+		log.Warn().Err(err).Msg("webrtc: scrcpy server start failed")
+		return false
+	}
+	defer serverCmd.Process.Kill()
+
+	// Wait for server to start and connect
+	time.Sleep(2 * time.Second)
+
+	videoConn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 5*time.Second)
+	if err != nil {
+		log.Warn().Err(err).Msg("webrtc: scrcpy connect failed")
+		return false
+	}
+	defer videoConn.Close()
+
+	// Skip any initial handshake/header bytes from scrcpy
+	videoConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	dummy := make([]byte, 128)
+	if n, _ := videoConn.Read(dummy); n > 0 {
+		log.Debug().Int("bytes", n).Msg("webrtc: skipped scrcpy header")
+	}
+	videoConn.SetReadDeadline(time.Time{}) // clear deadline
+
+	log.Info().Str("serial", serial).Int("port", port).Msg("webrtc: scrcpy streaming started")
+
+	// Read H.264 from scrcpy TCP socket and send via WebRTC
+	h.readAndSendNALs(ctx, videoConn, track, pliCh)
+
+	log.Info().Str("serial", serial).Msg("webrtc: scrcpy streaming ended")
+	return true
+}
+
+// streamViaScreenrecord uses Android's built-in screenrecord (fallback).
+func (h *webrtcHandlers) streamViaScreenrecord(ctx context.Context, track *webrtc.TrackLocalStaticSample, serial string, pliCh <-chan struct{}) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		checkCmd := exec.CommandContext(ctx, h.sdk.ADBPath(), "-s", serial, "shell", "echo", "ok")
+		if out, err := checkCmd.Output(); err != nil || len(out) == 0 {
+			time.Sleep(3 * time.Second)
+			continue
+		}
+
 		cmd := exec.CommandContext(ctx, h.sdk.ADBPath(), "-s", serial, "shell",
-			"screenrecord", "--output-format=h264", "--size", "720x1600", "--bit-rate", "4000000", "-")
+			"screenrecord", "--output-format=h264", "--bit-rate", "4000000", "--time-limit", "120", "-")
 
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {
-			return
+			time.Sleep(3 * time.Second)
+			continue
 		}
 		if err := cmd.Start(); err != nil {
-			return
+			time.Sleep(3 * time.Second)
+			continue
 		}
 
-		log.Info().Str("serial", serial).Msg("webrtc: screenrecord started")
+		log.Info().Str("serial", serial).Msg("webrtc: screenrecord started (fallback)")
 
-		h.readNALsAndSend(ctx, stdout, track, &cachedSPS, &cachedPPS)
+		go func() {
+			time.Sleep(300 * time.Millisecond)
+			exec.CommandContext(ctx, h.sdk.ADBPath(), "-s", serial, "shell", "input", "swipe", "1", "1", "1", "1", "50").Run()
+		}()
+
+		h.readAndSendNALs(ctx, stdout, track, pliCh)
 
 		cmd.Process.Kill()
 		cmd.Wait()
@@ -181,121 +422,137 @@ func (h *webrtcHandlers) streamH264(pc *webrtc.PeerConnection, track *webrtc.Tra
 		case <-ctx.Done():
 			return
 		default:
-			log.Debug().Msg("webrtc: restarting screenrecord")
+			time.Sleep(2 * time.Second)
 		}
 	}
 }
 
-// readNALsAndSend reads Annex B H.264, strips start codes, builds access units, sends samples.
-func (h *webrtcHandlers) readNALsAndSend(ctx context.Context, reader io.Reader, track *webrtc.TrackLocalStaticSample, sps, pps *[]byte) {
-	buf := make([]byte, 0, 512*1024)
-	tmp := make([]byte, 65536)
+// readAndSendNALs reads H.264 NALs and sends them via WebRTC.
+// Uses a producer/consumer pattern: reader goroutine reads NALs as fast as
+// possible into a channel, sender goroutine sends the latest frames.
+// Old frames are dropped to prevent the stream from falling behind.
+func (h *webrtcHandlers) readAndSendNALs(ctx context.Context, reader io.Reader, track *webrtc.TrackLocalStaticSample, pliCh <-chan struct{}) {
+	r, err := h264reader.NewReader(reader)
+	if err != nil {
+		return
+	}
 
-	// Accumulate NALs into access units (one frame = SPS+PPS+IDR or just slice NALs)
-	var accessUnit []byte
-	lastSend := time.Now()
+	type nalUnit struct {
+		data    []byte
+		nalType byte
+	}
+
+	// Small buffer — forces drops when consumer can't keep up
+	nalCh := make(chan nalUnit, 2)
+
+	// Producer: reads NALs as fast as possible
+	go func() {
+		defer close(nalCh)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			nal, err := r.NextNAL()
+			if err != nil {
+				return
+			}
+			if len(nal.Data) == 0 {
+				continue
+			}
+			nu := nalUnit{
+				data:    append([]byte{}, nal.Data...),
+				nalType: nal.Data[0] & 0x1F,
+			}
+			// Non-blocking send — drop if channel full (consumer behind)
+			select {
+			case nalCh <- nu:
+			default:
+				// Drop this NAL — we're behind
+			}
+		}
+	}()
+
+	var sps, pps []byte
+	var needConfig atomic.Bool
+	needConfig.Store(true)
+	frameCount := 0
+	frameDuration := time.Millisecond * 33
 
 	for {
+		var nu nalUnit
+		var ok bool
+
 		select {
 		case <-ctx.Done():
 			return
-		default:
-		}
-
-		n, err := reader.Read(tmp)
-		if n > 0 {
-			buf = append(buf, tmp[:n]...)
-
-			// Extract complete NAL units
-			for {
-				nalStart := findStartCode(buf, 0)
-				if nalStart < 0 {
-					break
-				}
-				nalEnd := findStartCode(buf, nalStart+4)
-				if nalEnd < 0 {
-					break
-				}
-
-				// Extract NAL WITHOUT start code (strip 00 00 00 01)
-				nalData := buf[nalStart+4 : nalEnd]
-				buf = buf[nalEnd:]
-
-				if len(nalData) == 0 {
-					continue
-				}
-
-				nalType := nalData[0] & 0x1F
-
-				switch nalType {
-				case 7: // SPS
-					*sps = make([]byte, len(nalData))
-					copy(*sps, nalData)
-				case 8: // PPS
-					*pps = make([]byte, len(nalData))
-					copy(*pps, nalData)
-				case 5: // IDR (keyframe) — prepend SPS+PPS in Annex B
-					// Pion expects Annex B format with start codes
-					accessUnit = accessUnit[:0]
-					if *sps != nil && *pps != nil {
-						accessUnit = append(accessUnit, 0, 0, 0, 1)
-						accessUnit = append(accessUnit, *sps...)
-						accessUnit = append(accessUnit, 0, 0, 0, 1)
-						accessUnit = append(accessUnit, *pps...)
-					}
-					accessUnit = append(accessUnit, 0, 0, 0, 1)
-					accessUnit = append(accessUnit, nalData...)
-
-					now := time.Now()
-					duration := now.Sub(lastSend)
-					if duration < time.Millisecond {
-						duration = 33 * time.Millisecond
-					}
-					lastSend = now
-
-					if err := track.WriteSample(media.Sample{
-						Data:     accessUnit,
-						Duration: duration,
-					}); err != nil {
-						return
-					}
-					accessUnit = accessUnit[:0]
-
-				case 1: // Non-IDR slice (P/B frame)
-					// Send raw NAL in Annex B
-					frame := make([]byte, 4+len(nalData))
-					frame[0] = 0; frame[1] = 0; frame[2] = 0; frame[3] = 1
-					copy(frame[4:], nalData)
-
-					now := time.Now()
-					duration := now.Sub(lastSend)
-					if duration < time.Millisecond {
-						duration = 33 * time.Millisecond
-					}
-					lastSend = now
-
-					if err := track.WriteSample(media.Sample{
-						Data:     frame,
-						Duration: duration,
-					}); err != nil {
-						return
-					}
-				}
+		case <-pliCh:
+			needConfig.Store(true)
+		case nu, ok = <-nalCh:
+			if !ok {
+				log.Info().Int("frames_sent", frameCount).Msg("webrtc: stream ended")
+				return
 			}
 		}
-		if err != nil {
-			return
-		}
-	}
-}
 
-func findStartCode(data []byte, offset int) int {
-	for i := offset; i < len(data)-3; i++ {
-		if data[i] == 0 && data[i+1] == 0 && data[i+2] == 0 && data[i+3] == 1 {
-			return i
+		if len(nu.data) == 0 {
+			continue
+		}
+
+		switch nu.nalType {
+		case 7: // SPS
+			sps = nu.data
+		case 8: // PPS
+			pps = nu.data
+
+		case 5: // IDR — always send with SPS+PPS
+			var au []byte
+			if sps != nil {
+				au = append(au, 0, 0, 0, 1)
+				au = append(au, sps...)
+			}
+			if pps != nil {
+				au = append(au, 0, 0, 0, 1)
+				au = append(au, pps...)
+			}
+			au = append(au, 0, 0, 0, 1)
+			au = append(au, nu.data...)
+			needConfig.Store(false)
+
+			if err := track.WriteSample(media.Sample{Data: au, Duration: frameDuration}); err != nil {
+				return
+			}
+			frameCount++
+			if frameCount == 1 {
+				log.Info().Int("sps_len", len(sps)).Int("pps_len", len(pps)).Int("idr_len", len(nu.data)).Msg("webrtc: first IDR sent")
+			}
+
+		case 1: // P/B frame
+			var frame []byte
+			if needConfig.Load() && sps != nil && pps != nil {
+				frame = append(frame, 0, 0, 0, 1)
+				frame = append(frame, sps...)
+				frame = append(frame, 0, 0, 0, 1)
+				frame = append(frame, pps...)
+				needConfig.Store(false)
+			}
+			frame = append(frame, 0, 0, 0, 1)
+			frame = append(frame, nu.data...)
+
+			if err := track.WriteSample(media.Sample{Data: frame, Duration: frameDuration}); err != nil {
+				return
+			}
+			frameCount++
+
+		case 6, 9: // SEI, AUD — skip
+			continue
+		}
+
+		if frameCount > 0 && frameCount%300 == 0 {
+			log.Debug().Int("frames", frameCount).Msg("webrtc: streaming")
 		}
 	}
-	return -1
 }
 
 func (h *webrtcHandlers) findSerial(id string) string {

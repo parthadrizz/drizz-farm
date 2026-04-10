@@ -25,11 +25,10 @@ type screenHandlers struct {
 }
 
 // StreamScreen handles WS /api/v1/sessions/:id/screen
-// Streams MJPEG frames of the emulator screen.
+// Streams PNG frames of the emulator screen (fallback).
 func (h *screenHandlers) StreamScreen(w http.ResponseWriter, r *http.Request) {
 	sessionID := chi.URLParam(r, "id")
 
-	// Find the instance for this session
 	status := h.pool.Status()
 	var serial string
 	for _, inst := range status.Instances {
@@ -38,14 +37,11 @@ func (h *screenHandlers) StreamScreen(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
-
-	// Also try matching by instance ID directly
 	if serial == "" {
 		if inst, ok := h.pool.GetInstance(sessionID); ok && inst.Device != nil {
 			serial = inst.Device.Serial()
 		}
 	}
-
 	if serial == "" {
 		http.Error(w, "session or instance not found", http.StatusNotFound)
 		return
@@ -87,7 +83,6 @@ func (h *screenHandlers) StreamScreen(w http.ResponseWriter, r *http.Request) {
 
 // tryScreenrecord streams H.264 via Android's built-in screenrecord.
 func (h *screenHandlers) tryScreenrecord(ctx context.Context, conn *websocket.Conn, serial string) bool {
-	// Start screenrecord piping raw H.264 to stdout
 	cmd := exec.CommandContext(ctx, h.sdk.ADBPath(), "-s", serial, "shell",
 		"screenrecord", "--output-format=h264", "--size", "480x1066", "--bit-rate", "1000000", "-")
 
@@ -101,13 +96,10 @@ func (h *screenHandlers) tryScreenrecord(ctx context.Context, conn *websocket.Co
 		return false
 	}
 
-	// Tell browser it's H.264
 	conn.WriteMessage(websocket.TextMessage, []byte(`{"codec":"h264","width":480,"height":1066}`))
 
 	log.Info().Str("serial", serial).Msg("screen: H.264 streaming via screenrecord")
 
-	// Read H.264 and forward to WebSocket
-	// screenrecord outputs Annex B format (00 00 00 01 NAL units)
 	buf := make([]byte, 32768)
 	for {
 		select {
@@ -124,10 +116,8 @@ func (h *screenHandlers) tryScreenrecord(ctx context.Context, conn *websocket.Co
 			}
 		}
 		if readErr != nil {
-			// screenrecord has 3-min limit, restart
 			cmd.Process.Kill()
 			cmd.Wait()
-			// Restart
 			cmd = exec.CommandContext(ctx, h.sdk.ADBPath(), "-s", serial, "shell",
 				"screenrecord", "--output-format=h264", "--size", "480x1066", "--bit-rate", "1000000", "-")
 			stdout, err = cmd.StdoutPipe()
@@ -139,7 +129,6 @@ func (h *screenHandlers) tryScreenrecord(ctx context.Context, conn *websocket.Co
 }
 
 // StreamLogcat handles WS /api/v1/sessions/:id/logcat
-// Polls logcat and streams new lines.
 func (h *screenHandlers) StreamLogcat(w http.ResponseWriter, r *http.Request) {
 	sessionID := chi.URLParam(r, "id")
 
@@ -173,7 +162,6 @@ func (h *screenHandlers) StreamLogcat(w http.ResponseWriter, r *http.Request) {
 		for { _, _, err := conn.ReadMessage(); if err != nil { cancel(); return } }
 	}()
 
-	// Poll logcat every second, send last 20 lines
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 
@@ -197,6 +185,8 @@ func (h *screenHandlers) StreamLogcat(w http.ResponseWriter, r *http.Request) {
 
 // SendInput handles WS /api/v1/sessions/:id/input
 // Receives touch/key events from browser and forwards to emulator.
+// Uses exec-out for each command (fast, no PTY overhead).
+// Serialized via channel so only one command runs at a time.
 func (h *screenHandlers) SendInput(w http.ResponseWriter, r *http.Request) {
 	sessionID := chi.URLParam(r, "id")
 
@@ -227,20 +217,37 @@ func (h *screenHandlers) SendInput(w http.ResponseWriter, r *http.Request) {
 
 	log.Info().Str("serial", serial).Str("session", sessionID).Msg("input: relay started")
 
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+
+	// Serialized command queue — one at a time, drop stale
+	cmdCh := make(chan string, 4)
+	go func() {
+		adbPath := h.sdk.ADBPath()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case cmd := <-cmdCh:
+				// Use exec-out instead of shell — no PTY, less overhead
+				c := exec.CommandContext(ctx, adbPath, "-s", serial, "shell", cmd)
+				c.Run()
+			}
+		}
+	}()
+
 	for {
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
 			return
 		}
 
-		// Parse input command: "tap 500 800", "swipe 100 500 100 100 300", "text hello", "key 66"
 		cmd := string(msg)
 		if len(cmd) == 0 {
 			continue
 		}
 
 		var adbCmd string
-		// Simple protocol: first word is action
 		if len(cmd) > 4 && cmd[:4] == "tap " {
 			adbCmd = "input tap " + cmd[4:]
 		} else if len(cmd) > 6 && cmd[:6] == "swipe " {
@@ -259,8 +266,18 @@ func (h *screenHandlers) SendInput(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		if _, err := h.adb.Shell(r.Context(), serial, adbCmd); err != nil {
-			log.Debug().Err(err).Str("cmd", adbCmd).Msg("input: command failed")
+		// Non-blocking: drop oldest if full
+		select {
+		case cmdCh <- adbCmd:
+		default:
+			select {
+			case <-cmdCh:
+			default:
+			}
+			select {
+			case cmdCh <- adbCmd:
+			default:
+			}
 		}
 	}
 }

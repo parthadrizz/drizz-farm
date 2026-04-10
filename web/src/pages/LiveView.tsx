@@ -14,6 +14,7 @@ export function LiveView() {
   const [connected, setConnected] = useState(false);
   const [inputConnected, setInputConnected] = useState(false);
   const [instance, setInstance] = useState<DeviceInstance | null>(null);
+  const [deviceSize, setDeviceSize] = useState<{ w: number; h: number } | null>(null);
   const [fps, setFps] = useState(0);
   const frameCount = useRef(0);
   const [activeTab, setActiveTab] = useState<Tab>('device');
@@ -32,6 +33,19 @@ export function LiveView() {
   const [deviceInfo, setDeviceInfo] = useState<any>(null);
 
   useEffect(() => { api.pool().then(p => { const inst = p.instances.find((i: DeviceInstance) => i.id === id || i.session_id === id); if (inst) setInstance(inst); }); }, [id]);
+
+  // Fetch device resolution once for coordinate scaling
+  useEffect(() => {
+    if (!id) return;
+    fetch(`/api/v1/sessions/${id}/device-info`)
+      .then(r => r.ok ? r.json() : null)
+      .then(info => {
+        if (!info?.screen_size) return;
+        const m = /Physical size:\s*(\d+)x(\d+)/i.exec(info.screen_size || '');
+        if (m) setDeviceSize({ w: parseInt(m[1], 10), h: parseInt(m[2], 10) });
+      })
+      .catch(() => {});
+  }, [id]);
 
   // Screen — WebRTC H.264 (primary) with PNG WebSocket fallback
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -52,27 +66,40 @@ export function LiveView() {
         // Receive video track
         pc.ontrack = (event) => {
           console.log('WebRTC: ontrack fired', event.track.kind, event.streams.length);
+          const stream = event.streams[0] || new MediaStream([event.track]);
+
           if (videoRef.current) {
-            if (event.streams[0]) {
-              videoRef.current.srcObject = event.streams[0];
-            } else {
-              // No stream — create one from the track
-              const stream = new MediaStream([event.track]);
-              videoRef.current.srcObject = stream;
-            }
-            videoRef.current.play().catch(e => console.warn('play failed:', e));
-            setConnected(true);
-            console.log('WebRTC: video attached to element');
+            videoRef.current.srcObject = stream;
+            // Don't call play() — autoPlay attribute handles it
+            // Monitor when video actually starts rendering
+            videoRef.current.onloadedmetadata = () => {
+              console.log('WebRTC: metadata loaded',
+                'videoWidth:', videoRef.current?.videoWidth,
+                'videoHeight:', videoRef.current?.videoHeight);
+            };
+            videoRef.current.onplaying = () => {
+              console.log('WebRTC: video playing');
+            };
           }
+          setConnected(true);
         };
 
         pc.onconnectionstatechange = () => {
           console.log('WebRTC state:', pc.connectionState);
           if (pc.connectionState === 'connected') setConnected(true);
-          if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+          if (pc.connectionState === 'failed') {
+            console.error('WebRTC: connection FAILED, falling back to PNG');
             setConnected(false);
-            setUseWebRTC(false); // Fall back to PNG
+            setUseWebRTC(false);
           }
+          // Note: 'disconnected' is temporary — ICE can recover. Don't kill the connection.
+          if (pc.connectionState === 'disconnected') {
+            console.warn('WebRTC: ICE disconnected (may recover)');
+          }
+        };
+
+        pc.oniceconnectionstatechange = () => {
+          console.log('WebRTC ICE:', pc.iceConnectionState);
         };
 
         // Add transceiver for receiving video
@@ -162,31 +189,76 @@ export function LiveView() {
     return () => ws.close();
   }, [id]);
 
-  useEffect(() => { const i = setInterval(() => { setFps(frameCount.current); frameCount.current = 0; }, 1000); return () => clearInterval(i); }, []);
-
-  const sendInput = useCallback((cmd: string) => { if (inputWsRef.current?.readyState === WebSocket.OPEN) inputWsRef.current.send(cmd); }, []);
-
-  // Gestures
-  const dragStart = useRef<{ x: number; y: number; time: number } | null>(null);
-  const canvasCoords = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    const c = canvasRef.current;
-    if (!c) return { x: 0, y: 0 };
-    const r = c.getBoundingClientRect();
-    return { x: Math.round((e.clientX - r.left) * c.width / r.width), y: Math.round((e.clientY - r.top) * c.height / r.height) };
+  const lastFps = useRef(0);
+  useEffect(() => {
+    const i = setInterval(() => {
+      const current = frameCount.current;
+      setFps(current);
+      // Log when stream stalls or resumes
+      if (current === 0 && lastFps.current > 0) {
+        console.warn('WebRTC: stream STALLED (0 fps)');
+      } else if (current > 0 && lastFps.current === 0) {
+        console.log('WebRTC: stream RESUMED', current, 'fps');
+      }
+      lastFps.current = current;
+      frameCount.current = 0;
+    }, 1000);
+    return () => clearInterval(i);
   }, []);
-  const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => { dragStart.current = { ...canvasCoords(e), time: Date.now() }; }, [canvasCoords]);
-  const handleMouseUp = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+
+  const sendInput = useCallback((cmd: string) => {
+    if (inputWsRef.current?.readyState === WebSocket.OPEN) {
+      console.log('input:', cmd);
+      inputWsRef.current.send(cmd);
+    } else {
+      console.warn('input: WebSocket not open, dropping:', cmd);
+    }
+  }, []);
+
+  // Gestures — works for both canvas (PNG) and video (WebRTC)
+  const dragStart = useRef<{ x: number; y: number; time: number } | null>(null);
+  const elementCoords = useCallback((e: React.MouseEvent) => {
+    const el = e.currentTarget as HTMLElement;
+    const r = el.getBoundingClientRect();
+    // Use actual video/canvas dimensions for coordinate mapping
+    let srcW = r.width, srcH = r.height;
+    if (el instanceof HTMLVideoElement && el.videoWidth > 0) {
+      srcW = el.videoWidth;
+      srcH = el.videoHeight;
+    } else if (el instanceof HTMLCanvasElement) {
+      srcW = el.width;
+      srcH = el.height;
+    }
+    // For object-contain, compute the actual rendered area
+    const displayAspect = r.width / r.height;
+    const srcAspect = srcW / srcH;
+    let offsetX = 0, offsetY = 0, renderW = r.width, renderH = r.height;
+    if (srcAspect > displayAspect) {
+      renderH = r.width / srcAspect;
+      offsetY = (r.height - renderH) / 2;
+    } else {
+      renderW = r.height * srcAspect;
+      offsetX = (r.width - renderW) / 2;
+    }
+    const relX = Math.max(0, Math.min((e.clientX - r.left - offsetX) / renderW, 1));
+    const relY = Math.max(0, Math.min((e.clientY - r.top - offsetY) / renderH, 1));
+    const targetW = deviceSize?.w ?? srcW;
+    const targetH = deviceSize?.h ?? srcH;
+    return { x: Math.round(relX * targetW), y: Math.round(relY * targetH) };
+  }, []);
+  const handleMouseDown = useCallback((e: React.MouseEvent) => { dragStart.current = { ...elementCoords(e), time: Date.now() }; }, [elementCoords]);
+  const handleMouseUp = useCallback((e: React.MouseEvent) => {
     if (!dragStart.current) return;
-    const s = dragStart.current; const end = canvasCoords(e); dragStart.current = null;
+    const s = dragStart.current; const end = elementCoords(e); dragStart.current = null;
     const dist = Math.sqrt((end.x-s.x)**2 + (end.y-s.y)**2);
     if (dist < 50) sendInput(`tap ${s.x} ${s.y}`);
     else sendInput(`swipe ${s.x} ${s.y} ${end.x} ${end.y} ${Math.max(150, Math.min(Date.now()-s.time, 2000))}`);
-  }, [canvasCoords, sendInput]);
-  const handleMouseLeave = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+  }, [elementCoords, sendInput]);
+  const handleMouseLeave = useCallback((e: React.MouseEvent) => {
     if (!dragStart.current) return;
-    const s = dragStart.current; const end = canvasCoords(e); dragStart.current = null;
+    const s = dragStart.current; const end = elementCoords(e); dragStart.current = null;
     sendInput(`swipe ${s.x} ${s.y} ${end.x} ${end.y} ${Math.max(150, Math.min(Date.now()-s.time, 2000))}`);
-  }, [canvasCoords, sendInput]);
+  }, [elementCoords, sendInput]);
 
   // Keyboard
   useEffect(() => {
@@ -224,16 +296,15 @@ export function LiveView() {
           <div className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-emerald-400' : 'bg-red-400'}`} />
           <span className="text-[9px] text-gray-600">{connected ? `${fps}fps` : 'off'}{inputConnected ? '' : ' · no input'}</span>
         </div>
-        <div className="bg-gray-900 border border-gray-800 rounded-lg p-1 inline-block">
-          {!connected ? (
-            <div className="w-[240px] h-[533px] flex items-center justify-center"><div className="animate-spin w-5 h-5 border-2 border-gray-600 border-t-emerald-400 rounded-full" /></div>
-          ) : (<>
+        <div className="bg-gray-900 border border-gray-800 rounded-lg p-1 inline-block relative">
+          {!connected && (
+            <div className="w-[240px] h-[533px] flex items-center justify-center absolute inset-0 z-10"><div className="animate-spin w-5 h-5 border-2 border-gray-600 border-t-emerald-400 rounded-full" /></div>
+          )}
             <video ref={videoRef} autoPlay muted playsInline
               onMouseDown={handleMouseDown as any} onMouseUp={handleMouseUp as any} onMouseLeave={handleMouseLeave as any}
-              className={`w-[240px] h-[533px] cursor-crosshair rounded select-none bg-black object-cover ${useWebRTC ? '' : 'hidden'}`} />
+              className={`w-[240px] h-[533px] cursor-crosshair rounded select-none bg-black object-contain ${useWebRTC && connected ? '' : 'hidden'}`} />
             <canvas ref={canvasRef} onMouseDown={handleMouseDown} onMouseUp={handleMouseUp} onMouseLeave={handleMouseLeave}
-              className={`w-[240px] h-[533px] cursor-crosshair rounded select-none ${useWebRTC ? 'hidden' : ''}`} style={{ imageRendering: 'auto' }} />
-          </>)}
+              className={`w-[240px] h-[533px] cursor-crosshair rounded select-none ${!useWebRTC && connected ? '' : 'hidden'}`} style={{ imageRendering: 'auto' }} />
         </div>
         <div className="flex gap-1 mt-2 justify-center flex-wrap">
           <NavBtn onClick={() => sendInput('back')}>◀ Back</NavBtn>

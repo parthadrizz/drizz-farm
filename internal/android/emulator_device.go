@@ -121,7 +121,18 @@ func (d *EmulatorDevice) Reset(ctx context.Context) error {
 }
 
 // Shutdown kills the emulator process and releases ports.
+// Also cleans up any scrcpy/screenrecord processes and ADB forwards.
 func (d *EmulatorDevice) Shutdown(ctx context.Context) error {
+	serial := d.Serial()
+
+	// Kill scrcpy-server and screenrecord on the device (they survive host-side kills)
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	d.adb.Shell(cleanupCtx, serial, "pkill -f scrcpy")
+	d.adb.Shell(cleanupCtx, serial, "pkill screenrecord")
+	// Remove all ADB forwards for this device
+	d.adb.ForwardRemoveAll(cleanupCtx, serial)
+
 	if d.process != nil {
 		if err := d.emuCtrl.Kill(d.process); err != nil {
 			log.Error().Err(err).Str("avd", d.avdName).Msg("failed to kill emulator")

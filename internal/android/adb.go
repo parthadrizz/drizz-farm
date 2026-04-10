@@ -130,6 +130,11 @@ func (a *ADBClient) Forward(ctx context.Context, serial string, localPort, remot
 	return nil
 }
 
+// ForwardRemoveAll removes all port forwards for a device.
+func (a *ADBClient) ForwardRemoveAll(ctx context.Context, serial string) {
+	a.runner.Run(ctx, a.sdk.ADBPath(), "-s", serial, "forward", "--remove-all")
+}
+
 // Push copies a file from host to device.
 func (a *ADBClient) Push(ctx context.Context, serial string, localPath, remotePath string) error {
 	_, err := a.runner.Run(ctx, a.sdk.ADBPath(), "-s", serial, "push", localPath, remotePath)
