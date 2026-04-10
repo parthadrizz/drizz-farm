@@ -1,6 +1,8 @@
 package api
 
 import (
+	"encoding/json"
+	"io"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -133,14 +135,78 @@ func RegisterRoutes(r chi.Router, cfg *config.Config, p *pool.Pool, b *session.B
 		r.Get("/config/raw", cfgH.GetConfigRaw)
 		r.Put("/config/raw", cfgH.SaveConfigRaw)
 
-		// Federation
-		r.Get("/federation/peers", func(w http.ResponseWriter, r *http.Request) {
-			if deps.Federation == nil {
-				JSON(w, 200, map[string]any{"peers": []any{}, "count": 0})
-				return
-			}
-			peers := deps.Federation.Peers()
-			JSON(w, 200, map[string]any{"peers": peers, "count": len(peers)})
+		// Federation — manage all nodes from orchestrator
+		r.Route("/federation", func(r chi.Router) {
+			r.Get("/peers", func(w http.ResponseWriter, r *http.Request) {
+				if deps.Federation == nil {
+					JSON(w, 200, map[string]any{"peers": []any{}, "count": 0})
+					return
+				}
+				peers := deps.Federation.Peers()
+				JSON(w, 200, map[string]any{"peers": peers, "count": len(peers)})
+			})
+
+			r.Get("/status", func(w http.ResponseWriter, r *http.Request) {
+				if deps.Federation == nil {
+					JSON(w, 200, map[string]any{"nodes": []any{}, "total_nodes": 1})
+					return
+				}
+				JSON(w, 200, deps.Federation.GetFederatedStatus())
+			})
+
+			// Proxy management to a specific node
+			r.Get("/nodes/{node}/pool", func(w http.ResponseWriter, r *http.Request) {
+				node := chi.URLParam(r, "node")
+				data, err := deps.Federation.GetRemotePool(node)
+				if err != nil { Error(w, err); return }
+				w.Header().Set("Content-Type", "application/json")
+				w.Write(data)
+			})
+
+			r.Get("/nodes/{node}/avds", func(w http.ResponseWriter, r *http.Request) {
+				node := chi.URLParam(r, "node")
+				data, err := deps.Federation.GetRemoteAVDs(node)
+				if err != nil { Error(w, err); return }
+				w.Header().Set("Content-Type", "application/json")
+				w.Write(data)
+			})
+
+			r.Get("/nodes/{node}/system-images", func(w http.ResponseWriter, r *http.Request) {
+				node := chi.URLParam(r, "node")
+				data, err := deps.Federation.GetRemoteSystemImages(node)
+				if err != nil { Error(w, err); return }
+				w.Header().Set("Content-Type", "application/json")
+				w.Write(data)
+			})
+
+			r.Post("/nodes/{node}/create-avds", func(w http.ResponseWriter, r *http.Request) {
+				node := chi.URLParam(r, "node")
+				body, _ := io.ReadAll(r.Body)
+				data, err := deps.Federation.CreateRemoteAVDs(node, string(body))
+				if err != nil { Error(w, err); return }
+				w.Header().Set("Content-Type", "application/json")
+				w.Write(data)
+			})
+
+			r.Post("/nodes/{node}/boot", func(w http.ResponseWriter, r *http.Request) {
+				node := chi.URLParam(r, "node")
+				var req struct { AVDName string `json:"avd_name"` }
+				json.NewDecoder(r.Body).Decode(&req)
+				data, err := deps.Federation.BootRemoteAVD(node, req.AVDName)
+				if err != nil { Error(w, err); return }
+				w.Header().Set("Content-Type", "application/json")
+				w.Write(data)
+			})
+
+			r.Post("/nodes/{node}/shutdown", func(w http.ResponseWriter, r *http.Request) {
+				node := chi.URLParam(r, "node")
+				var req struct { InstanceID string `json:"instance_id"` }
+				json.NewDecoder(r.Body).Decode(&req)
+				data, err := deps.Federation.ShutdownRemoteInstance(node, req.InstanceID)
+				if err != nil { Error(w, err); return }
+				w.Header().Set("Content-Type", "application/json")
+				w.Write(data)
+			})
 		})
 
 		// History

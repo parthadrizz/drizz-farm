@@ -222,6 +222,111 @@ func (r *Registry) GetRemoteArtifacts(nodeAddr string, instanceID string) ([]byt
 	return io.ReadAll(resp.Body)
 }
 
+// --- Remote Node Management ---
+
+// GetRemotePool gets full pool status from a peer.
+func (r *Registry) GetRemotePool(nodeAddr string) ([]byte, error) {
+	return r.remoteGet(nodeAddr, "/api/v1/pool")
+}
+
+// GetRemoteHealth gets health from a peer.
+func (r *Registry) GetRemoteHealth(nodeAddr string) ([]byte, error) {
+	return r.remoteGet(nodeAddr, "/api/v1/node/health")
+}
+
+// GetRemoteAVDs lists AVDs on a peer.
+func (r *Registry) GetRemoteAVDs(nodeAddr string) ([]byte, error) {
+	return r.remoteGet(nodeAddr, "/api/v1/discovery/avds")
+}
+
+// GetRemoteSystemImages lists system images on a peer.
+func (r *Registry) GetRemoteSystemImages(nodeAddr string) ([]byte, error) {
+	return r.remoteGet(nodeAddr, "/api/v1/discovery/system-images")
+}
+
+// CreateRemoteAVDs creates AVDs on a peer.
+func (r *Registry) CreateRemoteAVDs(nodeAddr string, body string) ([]byte, error) {
+	return r.remotePost(nodeAddr, "/api/v1/discovery/create-avds", body)
+}
+
+// BootRemoteAVD boots an AVD on a peer.
+func (r *Registry) BootRemoteAVD(nodeAddr string, avdName string) ([]byte, error) {
+	return r.remotePost(nodeAddr, "/api/v1/pool/boot", fmt.Sprintf(`{"avd_name":"%s"}`, avdName))
+}
+
+// ShutdownRemoteInstance shuts down an instance on a peer.
+func (r *Registry) ShutdownRemoteInstance(nodeAddr string, instanceID string) ([]byte, error) {
+	return r.remotePost(nodeAddr, "/api/v1/pool/shutdown", fmt.Sprintf(`{"instance_id":"%s"}`, instanceID))
+}
+
+// GetFederatedStatus returns combined status of all nodes including self.
+func (r *Registry) GetFederatedStatus() map[string]any {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	nodes := make([]map[string]any, 0, len(r.peers)+1)
+
+	// Add self
+	nodes = append(nodes, map[string]any{
+		"name":     "self",
+		"host":     r.self,
+		"role":     "orchestrator",
+		"healthy":  true,
+	})
+
+	// Add peers
+	for _, p := range r.peers {
+		nodes = append(nodes, map[string]any{
+			"name":      p.Name,
+			"host":      fmt.Sprintf("%s:%d", p.Host, p.Port),
+			"role":      "worker",
+			"capacity":  p.Capacity,
+			"warm":      p.Warm,
+			"allocated": p.Allocated,
+			"available": p.Available,
+			"healthy":   p.Healthy,
+			"last_seen": p.LastSeen.Format("2006-01-02T15:04:05Z"),
+		})
+	}
+
+	totalCapacity := 0
+	totalAllocated := 0
+	totalAvailable := 0
+	for _, p := range r.peers {
+		totalCapacity += p.Capacity
+		totalAllocated += p.Allocated
+		totalAvailable += p.Available
+	}
+
+	return map[string]any{
+		"nodes":          nodes,
+		"total_nodes":    len(r.peers) + 1,
+		"total_capacity": totalCapacity,
+		"total_allocated": totalAllocated,
+		"total_available": totalAvailable,
+	}
+}
+
+// --- HTTP helpers ---
+
+func (r *Registry) remoteGet(nodeAddr, path string) ([]byte, error) {
+	resp, err := r.client.Get(fmt.Sprintf("http://%s%s", nodeAddr, path))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	return io.ReadAll(resp.Body)
+}
+
+func (r *Registry) remotePost(nodeAddr, path, body string) ([]byte, error) {
+	resp, err := r.client.Post(fmt.Sprintf("http://%s%s", nodeAddr, path), "application/json", strings.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	return io.ReadAll(resp.Body)
+}
+
 // StartRefreshLoop periodically refreshes peer status.
 func (r *Registry) StartRefreshLoop(ctx context.Context, interval time.Duration) {
 	go func() {
