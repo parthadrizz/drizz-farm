@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 
+	"github.com/drizz-dev/drizz-farm/internal/appium"
 	"github.com/drizz-dev/drizz-farm/internal/config"
 	"github.com/drizz-dev/drizz-farm/internal/pool"
 	"github.com/drizz-dev/drizz-farm/internal/store"
@@ -32,6 +33,7 @@ type Broker struct {
 	cfg       *config.Config
 	store     *store.Store
 	webhook   *webhook.Sender
+	appium    *appium.Manager
 	hostIP    string
 	readyCh   chan struct{}
 
@@ -54,6 +56,7 @@ func NewBroker(cfg *config.Config, p *pool.Pool, s *store.Store) *Broker {
 		pool:     p,
 		store:    s,
 		webhook:  webhook.NewSender(webhookURLs),
+		appium:   appium.NewManager(detectLANIP()),
 		queue:    NewQueue(cfg.Pool.QueueMaxSize, queueTimeout),
 		cfg:      cfg,
 		hostIP:   detectLANIP(),
@@ -83,6 +86,7 @@ func (b *Broker) Stop() {
 	if b.cancel != nil {
 		b.cancel()
 	}
+	b.appium.StopAll()
 }
 
 // Create creates a new session, allocating an emulator from the pool.
@@ -148,6 +152,9 @@ func (b *Broker) Release(ctx context.Context, id string) error {
 		b.store.RecordSession(sess.ID, sess.Profile, sess.Platform, sess.InstanceID, "", sess.Connection.ADBSerial, sess.Connection.Host, sess.Source, "released", sess.Connection.ADBPort, sess.CreatedAt, sess.ReleasedAt)
 		b.store.RecordEvent("session_released", sess.InstanceID, sess.ID, fmt.Sprintf("duration=%s", now.Sub(sess.CreatedAt)))
 	}
+
+	// Stop Appium server
+	b.appium.Stop(id)
 
 	// Webhook
 	b.webhook.Send(webhook.Event{
@@ -248,6 +255,20 @@ func (b *Broker) createSessionFromInstance(inst *pool.DeviceInstance, req Create
 		conn := b.buildConnectionInfo(inst)
 		b.store.RecordSession(sess.ID, sess.Profile, sess.Platform, inst.ID, deviceName, conn.ADBSerial, conn.Host, sess.Source, "active", conn.ADBPort, sess.CreatedAt, nil)
 		b.store.RecordEvent("session_created", inst.ID, sess.ID, "profile="+sess.Profile)
+	}
+
+	// Start Appium server for this session
+	if b.appium.IsAvailable() {
+		serial := ""
+		if inst.Device != nil {
+			serial = inst.Device.Serial()
+		}
+		if appInst, err := b.appium.Start(sess.ID, serial); err == nil {
+			sess.Connection.AppiumURL = appInst.WebDriverURL
+			log.Info().Str("session", sess.ID).Str("appium", appInst.WebDriverURL).Msg("broker: Appium server started")
+		} else {
+			log.Warn().Err(err).Str("session", sess.ID).Msg("broker: Appium start failed (session still works via ADB)")
+		}
 	}
 
 	// Webhook

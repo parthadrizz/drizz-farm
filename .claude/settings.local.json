@@ -95,7 +95,10 @@
       "Bash(rm -f /Users/humblefool2909/drizz-farm/.git/index.lock)",
       "Bash(git commit -m 'refactor: remove test framework features — farm is infrastructure only:*)",
       "Bash(sudo npm:*)",
-      "Bash(npx appium:*)"
+      "Bash(npx appium:*)",
+      "Bash(export PATH=\"/opt/homebrew/opt/node@22/bin:$PATH\")",
+      "Bash(appium --version)",
+      "Bash(appium driver:*)"
     ]
   }
 }

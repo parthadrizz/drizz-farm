@@ -70,12 +70,13 @@ type Session struct {
 
 // ConnectionInfo holds the connection details for a session.
 type ConnectionInfo struct {
-	Host        string `json:"host"`
-	DeviceKind  string `json:"device_kind,omitempty"`
-	ADBPort     int    `json:"adb_port,omitempty"`
-	ADBSerial   string `json:"adb_serial,omitempty"`
-	ConsolePort int    `json:"console_port,omitempty"`
-	UDID        string `json:"udid,omitempty"` // iOS future
+	Host         string `json:"host"`
+	DeviceKind   string `json:"device_kind,omitempty"`
+	ADBPort      int    `json:"adb_port,omitempty"`
+	ADBSerial    string `json:"adb_serial,omitempty"`
+	ConsolePort  int    `json:"console_port,omitempty"`
+	AppiumURL    string `json:"appium_url,omitempty"` // WebDriver endpoint
+	UDID         string `json:"udid,omitempty"`       // iOS future
 }
 
 // IsActive returns true if the session is still in use.
