@@ -107,6 +107,18 @@ export function LiveView() {
     dragStart.current = { x, y, time: Date.now() };
   }, [canvasCoords]);
 
+  // Track mouse leaving canvas mid-drag
+  const handleMouseLeave = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (dragStart.current) {
+      // Mouse left canvas while dragging — complete the swipe
+      const start = dragStart.current;
+      const { x: endX, y: endY } = canvasCoords(e);
+      dragStart.current = null;
+      const swipeDuration = Math.max(150, Math.min(Date.now() - start.time, 2000));
+      sendInput(`swipe ${start.x} ${start.y} ${endX} ${endY} ${swipeDuration}`);
+    }
+  }, [canvasCoords, sendInput]);
+
   const handleMouseUp = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!dragStart.current) return;
     const start = dragStart.current;
@@ -117,12 +129,12 @@ export function LiveView() {
     const duration = Date.now() - start.time;
     dragStart.current = null;
 
-    if (dist < 15) {
-      // Short distance = tap
-      sendInput(`tap ${endX} ${endY}`);
+    if (dist < 50) {
+      // Short distance = tap (50px in emulator coords ~ 11px on screen)
+      sendInput(`tap ${start.x} ${start.y}`);
     } else {
-      // Swipe — send with duration for speed control
-      const swipeDuration = Math.max(100, Math.min(duration, 1000));
+      // Swipe
+      const swipeDuration = Math.max(150, Math.min(duration, 2000));
       sendInput(`swipe ${start.x} ${start.y} ${endX} ${endY} ${swipeDuration}`);
     }
   }, [canvasCoords, sendInput]);
@@ -181,7 +193,8 @@ export function LiveView() {
             <canvas ref={canvasRef}
               onMouseDown={handleMouseDown}
               onMouseUp={handleMouseUp}
-              className="w-[240px] h-[533px] cursor-crosshair rounded" style={{ imageRendering: 'auto' }} />
+              onMouseLeave={handleMouseLeave}
+              className="w-[240px] h-[533px] cursor-crosshair rounded select-none" style={{ imageRendering: 'auto' }} />
           )}
         </div>
         <div className="flex gap-1 mt-2 justify-center flex-wrap">
