@@ -99,7 +99,14 @@ func (b *Broker) Create(ctx context.Context, req CreateSessionRequest) (*Session
 		req.Platform = "android"
 	}
 	if req.Profile == "" {
-		return nil, fmt.Errorf("profile is required")
+		// Default to first configured profile
+		for name := range b.cfg.Pool.Profiles.Android {
+			req.Profile = name
+			break
+		}
+		if req.Profile == "" {
+			return nil, fmt.Errorf("no profiles configured")
+		}
 	}
 
 	// Try to allocate from local pool
@@ -233,7 +240,32 @@ func (b *Broker) Release(ctx context.Context, id string) error {
 		return err
 	}
 
+	// Drain queue — try to allocate the freed device to a waiting request
+	go b.drainQueue(ctx)
+
 	return nil
+}
+
+// drainQueue checks if there are queued requests and tries to allocate devices to them.
+func (b *Broker) drainQueue(ctx context.Context) {
+	entry := b.queue.TryDequeue()
+	if entry == nil {
+		return
+	}
+
+	log.Info().Str("profile", entry.Request.Profile).Msg("broker: draining queue, allocating to waiting request")
+
+	inst, err := b.pool.Allocate(ctx, entry.Request.Profile)
+	if err != nil {
+		// Still no capacity — put it back at the front
+		log.Debug().Err(err).Msg("broker: queue drain failed, re-queueing")
+		b.queue.PushFront(entry)
+		return
+	}
+
+	sess := b.createSessionFromInstance(inst, entry.Request)
+	entry.ResultCh <- QueueResult{Session: sess}
+	log.Info().Str("session", sess.ID).Str("serial", inst.Device.Serial()).Msg("broker: queued request fulfilled")
 }
 
 // List returns all sessions (active and recent).

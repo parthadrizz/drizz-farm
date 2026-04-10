@@ -36,10 +36,13 @@ type OnDeviceReady func()
 
 // Pool manages a unified fleet of emulators and physical devices.
 type Pool struct {
-	mu sync.RWMutex
+	mu  sync.RWMutex
+	sem chan struct{} // semaphore: limits concurrent devices to MaxConcurrent
 
 	cfg       *config.Config
 	instances map[string]*DeviceInstance
+	bootingAVDs map[string]bool // AVD names currently being booted
+	avdMu     sync.Mutex       // protects AVD name selection only
 
 	// Android emulator dependencies
 	sdk       *android.SDK
@@ -60,8 +63,10 @@ type Pool struct {
 func New(cfg *config.Config, sdk *android.SDK, runner android.CommandRunner) *Pool {
 	adb := android.NewADBClient(sdk, runner)
 	return &Pool{
-		cfg:       cfg,
-		instances: make(map[string]*DeviceInstance),
+		cfg:         cfg,
+		sem:         make(chan struct{}, cfg.Pool.MaxConcurrent),
+		instances:   make(map[string]*DeviceInstance),
+		bootingAVDs: make(map[string]bool),
 		sdk:       sdk,
 		adb:       adb,
 		avdMgr:    android.NewAVDManager(sdk, runner),
@@ -215,30 +220,61 @@ func (p *Pool) Allocate(ctx context.Context, profileName string) (*DeviceInstanc
 		}
 	}
 
-	// 2. No warm — boot emulator on-demand if under capacity
-	underCapacity := len(p.instances) < p.cfg.Pool.MaxConcurrent
-	p.mu.Unlock() // Release lock before external commands
+	// 2. No warm — try to acquire a semaphore slot (non-blocking)
+	p.mu.Unlock()
 
-	if underCapacity {
-		avdName, err := p.findUnbootedAVD(ctx)
-		if err != nil || avdName == "" {
-			return nil, ErrPoolExhausted
-		}
-
-		guessedProfile := guessProfileForAVD(avdName, p.cfg)
-		log.Info().Str("avd", avdName).Msg("pool: booting on-demand")
-
-		inst, err := p.bootEmulator(ctx, avdName, guessedProfile)
-		if err != nil {
-			return nil, fmt.Errorf("pool: on-demand boot failed: %w", err)
-		}
-		if err := inst.TransitionTo(StateAllocated); err != nil {
-			return nil, err
-		}
-		return inst, nil
+	select {
+	case p.sem <- struct{}{}: // acquired slot
+	default:
+		return nil, ErrPoolExhausted // pool full
 	}
 
-	return nil, ErrPoolExhausted
+	// Pick a unique AVD name (short lock to prevent double-selection)
+	p.avdMu.Lock()
+	usedAVDs := make(map[string]bool)
+	p.mu.RLock()
+	for _, inst := range p.instances {
+		if inst.Device != nil {
+			usedAVDs[inst.Device.DisplayName()] = true
+		}
+	}
+	for avd := range p.bootingAVDs {
+		usedAVDs[avd] = true
+	}
+	p.mu.RUnlock()
+
+	avdName, err := p.findUnbootedAVDExcluding(ctx, usedAVDs)
+	if err != nil || avdName == "" {
+		p.avdMu.Unlock()
+		<-p.sem // release slot
+		return nil, ErrPoolExhausted
+	}
+
+	p.mu.Lock()
+	p.bootingAVDs[avdName] = true
+	p.mu.Unlock()
+	p.avdMu.Unlock() // AVD reserved, others can pick a different one
+
+	guessedProfile := guessProfileForAVD(avdName, p.cfg)
+	log.Info().Str("avd", avdName).Msg("pool: booting on-demand")
+
+	// Boot in parallel — semaphore holds our slot
+	inst, err := p.bootEmulator(ctx, avdName, guessedProfile)
+
+	p.mu.Lock()
+	delete(p.bootingAVDs, avdName)
+	p.mu.Unlock()
+
+	if err != nil {
+		<-p.sem // release slot on failure
+		return nil, fmt.Errorf("pool: on-demand boot failed: %w", err)
+	}
+
+	if err := inst.TransitionTo(StateAllocated); err != nil {
+		<-p.sem
+		return nil, err
+	}
+	return inst, nil
 }
 
 // Release returns a device to the pool after use.
@@ -501,6 +537,13 @@ func (p *Pool) destroyInstance(ctx context.Context, inst *DeviceInstance) error 
 	}
 
 	p.removeInstance(inst.ID)
+
+	// Release semaphore slot
+	select {
+	case <-p.sem:
+	default:
+	}
+
 	log.Info().Str("instance", inst.ID).Msg("pool: instance destroyed")
 	return nil
 }
@@ -674,21 +717,30 @@ func (p *Pool) totalInstances() int {
 // findUnbootedAVD finds an AVD not currently in the pool.
 // IMPORTANT: caller must NOT hold p.mu — this runs external commands and reads p.instances.
 func (p *Pool) findUnbootedAVD(ctx context.Context) (string, error) {
+	return p.findUnbootedAVDExcluding(ctx, nil)
+}
+
+func (p *Pool) findUnbootedAVDExcluding(ctx context.Context, exclude map[string]bool) (string, error) {
 	allAVDs, err := p.avdMgr.List(ctx)
 	if err != nil {
 		return "", err
 	}
 
-	// Read instances without lock — caller already released it or we're outside lock
-	booted := make(map[string]bool)
+	// Combine: instances already running + explicitly excluded (booting)
+	used := make(map[string]bool)
+	p.mu.RLock()
 	for _, inst := range p.instances {
 		if inst.Device != nil {
-			booted[inst.Device.DisplayName()] = true
+			used[inst.Device.DisplayName()] = true
 		}
+	}
+	p.mu.RUnlock()
+	for name := range exclude {
+		used[name] = true
 	}
 
 	for _, avd := range allAVDs {
-		if !booted[avd.Name] {
+		if !used[avd.Name] {
 			return avd.Name, nil
 		}
 	}
