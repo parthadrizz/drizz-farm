@@ -113,7 +113,8 @@
       "Bash(python3 -c ':*)",
       "Bash(/opt/homebrew/bin/go doc:*)",
       "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(f'instances={len\\(d[\\\\\"instances\\\\\"]\\)}'\\); [print\\(f'  {i[\\\\\"id\\\\\"]} {i[\\\\\"device_name\\\\\"]}'\\) for i in d['instances']]\")",
-      "Bash(git commit -m 'fix: proper H.264 codec registration + PLI interceptor for WebRTC:*)"
+      "Bash(git commit -m 'fix: proper H.264 codec registration + PLI interceptor for WebRTC:*)",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(f'ID={d[\\\\\"id\\\\\"]} inst={d[\\\\\"instance_id\\\\\"]}'\\)\")"
     ]
   }
 }

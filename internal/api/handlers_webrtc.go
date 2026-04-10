@@ -26,8 +26,6 @@ type webrtcHandlers struct {
 	mu   sync.Mutex
 }
 
-// Offer handles POST /api/v1/sessions/:id/webrtc/offer
-// Receives browser's SDP offer, returns SDP answer.
 func (h *webrtcHandlers) Offer(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	serial := h.findSerial(id)
@@ -45,21 +43,18 @@ func (h *webrtcHandlers) Offer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Register H.264 codec with proper parameters
+	// Register H.264 codec
 	m := &webrtc.MediaEngine{}
-	if err := m.RegisterCodec(webrtc.RTPCodecParameters{
+	m.RegisterCodec(webrtc.RTPCodecParameters{
 		RTPCodecCapability: webrtc.RTPCodecCapability{
 			MimeType:    "video/H264",
 			ClockRate:   90000,
 			SDPFmtpLine: "packetization-mode=1;profile-level-id=42e01f;level-asymmetry-allowed=1",
 		},
 		PayloadType: 102,
-	}, webrtc.RTPCodecTypeVideo); err != nil {
-		JSON(w, 500, ErrorResponse{Error: "codec_failed", Message: err.Error(), Code: 500})
-		return
-	}
+	}, webrtc.RTPCodecTypeVideo)
 
-	// Add PLI interceptor — sends periodic keyframe requests
+	// PLI interceptor
 	ir := &interceptor.Registry{}
 	pliFactory, _ := intervalpli.NewReceiverInterceptor(intervalpli.GeneratorInterval(2 * time.Second))
 	if pliFactory != nil {
@@ -68,21 +63,18 @@ func (h *webrtcHandlers) Offer(w http.ResponseWriter, r *http.Request) {
 
 	api := webrtc.NewAPI(webrtc.WithMediaEngine(m), webrtc.WithInterceptorRegistry(ir))
 
-	config := webrtc.Configuration{
+	pc, err := api.NewPeerConnection(webrtc.Configuration{
 		ICEServers: []webrtc.ICEServer{
 			{URLs: []string{"stun:stun.l.google.com:19302"}},
 		},
-	}
-
-	pc, err := api.NewPeerConnection(config)
+	})
 	if err != nil {
-		JSON(w, 500, ErrorResponse{Error: "webrtc_failed", Message: err.Error(), Code: 500})
+		JSON(w, 500, ErrorResponse{Error: "pc_failed", Message: err.Error(), Code: 500})
 		return
 	}
 
-	// Add H.264 video track
 	videoTrack, err := webrtc.NewTrackLocalStaticSample(
-		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264},
+		webrtc.RTPCodecCapability{MimeType: "video/H264"},
 		"video", "drizz-farm",
 	)
 	if err != nil {
@@ -94,11 +86,11 @@ func (h *webrtcHandlers) Offer(w http.ResponseWriter, r *http.Request) {
 	rtpSender, err := pc.AddTrack(videoTrack)
 	if err != nil {
 		pc.Close()
-		JSON(w, 500, ErrorResponse{Error: "add_track_failed", Message: err.Error(), Code: 500})
+		JSON(w, 500, ErrorResponse{Error: "add_track", Message: err.Error(), Code: 500})
 		return
 	}
 
-	// Read RTCP packets (required)
+	// Read RTCP
 	go func() {
 		buf := make([]byte, 1500)
 		for {
@@ -108,55 +100,45 @@ func (h *webrtcHandlers) Offer(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// Set remote description (browser's offer)
-	offer := webrtc.SessionDescription{
-		Type: webrtc.SDPTypeOffer,
-		SDP:  req.SDP,
-	}
-	if err := pc.SetRemoteDescription(offer); err != nil {
+	// Set offer
+	if err := pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: req.SDP}); err != nil {
 		pc.Close()
-		JSON(w, 500, ErrorResponse{Error: "set_offer_failed", Message: err.Error(), Code: 500})
+		JSON(w, 500, ErrorResponse{Error: "set_offer", Message: err.Error(), Code: 500})
 		return
 	}
 
-	// Create answer
 	answer, err := pc.CreateAnswer(nil)
 	if err != nil {
 		pc.Close()
-		JSON(w, 500, ErrorResponse{Error: "create_answer_failed", Message: err.Error(), Code: 500})
+		JSON(w, 500, ErrorResponse{Error: "create_answer", Message: err.Error(), Code: 500})
 		return
 	}
 
-	// Set local description
 	if err := pc.SetLocalDescription(answer); err != nil {
 		pc.Close()
-		JSON(w, 500, ErrorResponse{Error: "set_answer_failed", Message: err.Error(), Code: 500})
+		JSON(w, 500, ErrorResponse{Error: "set_answer", Message: err.Error(), Code: 500})
 		return
 	}
 
-	// Wait for ICE gathering
-	gatherComplete := webrtc.GatheringCompletePromise(pc)
-	<-gatherComplete
+	// Wait for ICE
+	<-webrtc.GatheringCompletePromise(pc)
 
-	// Start streaming H.264 from screenrecord
+	// Start H.264 streaming
 	go h.streamH264(pc, videoTrack, serial)
 
-	// Handle connection state
 	pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
-		log.Info().Str("state", state.String()).Str("serial", serial).Msg("webrtc: connection state")
+		log.Info().Str("state", state.String()).Str("serial", serial).Msg("webrtc: state")
 		if state == webrtc.PeerConnectionStateClosed || state == webrtc.PeerConnectionStateFailed {
 			pc.Close()
 		}
 	})
 
-	// Return answer
 	JSON(w, 200, map[string]string{
 		"sdp":  pc.LocalDescription().SDP,
 		"type": pc.LocalDescription().Type.String(),
 	})
 }
 
-// streamH264 pipes screenrecord H.264 into the WebRTC video track.
 func (h *webrtcHandlers) streamH264(pc *webrtc.PeerConnection, track *webrtc.TrackLocalStaticSample, serial string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -166,6 +148,9 @@ func (h *webrtcHandlers) streamH264(pc *webrtc.PeerConnection, track *webrtc.Tra
 			cancel()
 		}
 	})
+
+	// Cache SPS/PPS for resending on PLI
+	var cachedSPS, cachedPPS []byte
 
 	for {
 		select {
@@ -179,36 +164,36 @@ func (h *webrtcHandlers) streamH264(pc *webrtc.PeerConnection, track *webrtc.Tra
 
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {
-			log.Debug().Err(err).Msg("webrtc: pipe failed")
 			return
 		}
 		if err := cmd.Start(); err != nil {
-			log.Debug().Err(err).Msg("webrtc: screenrecord start failed")
 			return
 		}
 
-		log.Info().Str("serial", serial).Msg("webrtc: H.264 streaming started")
+		log.Info().Str("serial", serial).Msg("webrtc: screenrecord started")
 
-		// Read H.264 NAL units and write as samples
-		h.readAndSendNALUnits(ctx, stdout, track)
+		h.readNALsAndSend(ctx, stdout, track, &cachedSPS, &cachedPPS)
 
 		cmd.Process.Kill()
 		cmd.Wait()
 
-		// screenrecord has 3-min limit, restart
 		select {
 		case <-ctx.Done():
 			return
 		default:
-			log.Debug().Msg("webrtc: restarting screenrecord (3-min limit)")
+			log.Debug().Msg("webrtc: restarting screenrecord")
 		}
 	}
 }
 
-// readAndSendNALUnits reads H.264 Annex B stream and sends NAL units as RTP samples.
-func (h *webrtcHandlers) readAndSendNALUnits(ctx context.Context, reader io.Reader, track *webrtc.TrackLocalStaticSample) {
-	buf := make([]byte, 0, 512*1024) // accumulate buffer
-	tmp := make([]byte, 32768)       // read chunk
+// readNALsAndSend reads Annex B H.264, strips start codes, builds access units, sends samples.
+func (h *webrtcHandlers) readNALsAndSend(ctx context.Context, reader io.Reader, track *webrtc.TrackLocalStaticSample, sps, pps *[]byte) {
+	buf := make([]byte, 0, 512*1024)
+	tmp := make([]byte, 65536)
+
+	// Accumulate NALs into access units (one frame = SPS+PPS+IDR or just slice NALs)
+	var accessUnit []byte
+	lastSend := time.Now()
 
 	for {
 		select {
@@ -221,26 +206,91 @@ func (h *webrtcHandlers) readAndSendNALUnits(ctx context.Context, reader io.Read
 		if n > 0 {
 			buf = append(buf, tmp[:n]...)
 
-			// Find and send complete NAL units (delimited by 00 00 00 01)
+			// Extract complete NAL units
 			for {
-				nalStart := findNALStart(buf, 0)
+				nalStart := findStartCode(buf, 0)
 				if nalStart < 0 {
 					break
 				}
-				nalEnd := findNALStart(buf, nalStart+4)
+				nalEnd := findStartCode(buf, nalStart+4)
 				if nalEnd < 0 {
-					break // Incomplete NAL, wait for more data
+					break
 				}
 
-				nalUnit := buf[nalStart:nalEnd]
+				// Extract NAL WITHOUT start code (strip 00 00 00 01)
+				nalData := buf[nalStart+4 : nalEnd]
 				buf = buf[nalEnd:]
 
-				// Send as WebRTC sample
-				if err := track.WriteSample(media.Sample{
-					Data:     nalUnit,
-					Duration: time.Millisecond * 33, // ~30fps
-				}); err != nil {
-					return
+				if len(nalData) == 0 {
+					continue
+				}
+
+				nalType := nalData[0] & 0x1F
+
+				switch nalType {
+				case 7: // SPS
+					*sps = make([]byte, len(nalData))
+					copy(*sps, nalData)
+				case 8: // PPS
+					*pps = make([]byte, len(nalData))
+					copy(*pps, nalData)
+				case 5: // IDR (keyframe) — prepend SPS+PPS
+					// Build complete access unit: SPS + PPS + IDR
+					if *sps != nil && *pps != nil {
+						accessUnit = append(accessUnit[:0],
+							// SPS with length prefix (AVCC-style 4-byte length)
+							byte(len(*sps)>>24), byte(len(*sps)>>16), byte(len(*sps)>>8), byte(len(*sps)),
+						)
+						accessUnit = append(accessUnit, *sps...)
+						accessUnit = append(accessUnit,
+							byte(len(*pps)>>24), byte(len(*pps)>>16), byte(len(*pps)>>8), byte(len(*pps)),
+						)
+						accessUnit = append(accessUnit, *pps...)
+					}
+					// Add IDR
+					accessUnit = append(accessUnit,
+						byte(len(nalData)>>24), byte(len(nalData)>>16), byte(len(nalData)>>8), byte(len(nalData)),
+					)
+					accessUnit = append(accessUnit, nalData...)
+
+					// Send as one sample
+					now := time.Now()
+					duration := now.Sub(lastSend)
+					if duration < time.Millisecond {
+						duration = 33 * time.Millisecond
+					}
+					lastSend = now
+
+					if err := track.WriteSample(media.Sample{
+						Data:     accessUnit,
+						Duration: duration,
+					}); err != nil {
+						return
+					}
+					accessUnit = accessUnit[:0]
+
+				case 1: // Non-IDR slice (P/B frame)
+					// Send as single sample with length prefix
+					frame := make([]byte, 4+len(nalData))
+					frame[0] = byte(len(nalData) >> 24)
+					frame[1] = byte(len(nalData) >> 16)
+					frame[2] = byte(len(nalData) >> 8)
+					frame[3] = byte(len(nalData))
+					copy(frame[4:], nalData)
+
+					now := time.Now()
+					duration := now.Sub(lastSend)
+					if duration < time.Millisecond {
+						duration = 33 * time.Millisecond
+					}
+					lastSend = now
+
+					if err := track.WriteSample(media.Sample{
+						Data:     frame,
+						Duration: duration,
+					}); err != nil {
+						return
+					}
 				}
 			}
 		}
@@ -250,7 +300,7 @@ func (h *webrtcHandlers) readAndSendNALUnits(ctx context.Context, reader io.Read
 	}
 }
 
-func findNALStart(data []byte, offset int) int {
+func findStartCode(data []byte, offset int) int {
 	for i := offset; i < len(data)-3; i++ {
 		if data[i] == 0 && data[i+1] == 0 && data[i+2] == 0 && data[i+3] == 1 {
 			return i
@@ -260,7 +310,9 @@ func findNALStart(data []byte, offset int) int {
 }
 
 func (h *webrtcHandlers) findSerial(id string) string {
-	if h.pool == nil { return "" }
+	if h.pool == nil {
+		return ""
+	}
 	for _, inst := range h.pool.Status().Instances {
 		if inst.ID == id || inst.SessionID == id {
 			return inst.Serial
@@ -270,11 +322,4 @@ func (h *webrtcHandlers) findSerial(id string) string {
 		return inst.Device.Serial()
 	}
 	return ""
-}
-
-// ICECandidate handles POST /api/v1/sessions/:id/webrtc/candidate (trickle ICE)
-func (h *webrtcHandlers) ICECandidate(w http.ResponseWriter, r *http.Request) {
-	// For now, we use full ICE gathering before returning answer
-	// Trickle ICE can be added later
-	JSON(w, 200, map[string]string{"status": "not_needed"})
 }
