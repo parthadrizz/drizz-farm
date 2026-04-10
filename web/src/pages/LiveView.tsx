@@ -102,7 +102,6 @@ export function LiveView() {
   }, [sendInput]);
 
   // Helpers
-  const exec = async (cmd: string) => { if (id) { const r = await api.execADB(id, cmd); return r.output || ''; } return ''; };
   const chip = (label: string, active: boolean, onClick: () => void) => (
     <button key={label} onClick={onClick} className={`px-2 py-1 rounded text-[10px] transition ${active ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/50' : 'bg-gray-800 text-gray-300 border border-transparent hover:bg-gray-700'}`}>{label}</button>
   );
