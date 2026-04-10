@@ -117,14 +117,15 @@ func (h *screenV2Handlers) streamViaScrcpy(ctx context.Context, conn *websocket.
 		"video=true", "audio=false", "control=false",
 		"max_size=720", "video_bit_rate=2000000", "max_fps=30",
 		"video_codec=h264", "send_frame_meta=false",
+		"send_device_meta=false", "send_dummy_byte=false",
 	)
 	if err := serverCmd.Start(); err != nil {
 		return false
 	}
 	defer serverCmd.Process.Kill()
 
-	// Wait for server, then connect
-	time.Sleep(1500 * time.Millisecond)
+	// Wait for server to start
+	time.Sleep(2 * time.Second)
 
 	videoConn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 5*time.Second)
 	if err != nil {
@@ -132,6 +133,16 @@ func (h *screenV2Handlers) streamViaScrcpy(ctx context.Context, conn *websocket.
 		return false
 	}
 	defer videoConn.Close()
+
+	// Read and discard any initial handshake bytes (dummy byte, device name)
+	// Give it 500ms to send any header, then start forwarding
+	videoConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	dummy := make([]byte, 128)
+	n, _ := videoConn.Read(dummy)
+	if n > 0 {
+		log.Debug().Int("bytes", n).Msg("screen: skipped scrcpy header bytes")
+	}
+	videoConn.SetReadDeadline(time.Time{}) // Reset deadline
 
 	// Send codec header so browser knows it's H.264
 	conn.WriteMessage(websocket.TextMessage, []byte(`{"codec":"h264","width":720,"height":1600}`))

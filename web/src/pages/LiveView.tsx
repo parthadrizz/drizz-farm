@@ -47,33 +47,27 @@ export function LiveView() {
     ws.onopen = () => setConnected(true);
     ws.onclose = () => setConnected(false);
 
+    let detectedCodec = '';
+
     ws.onmessage = (event) => {
-      // First message is text with codec info
       if (typeof event.data === 'string') {
         try {
           const info = JSON.parse(event.data);
-          setCodec(info.codec);
-          if (info.codec === 'h264' && videoRef.current) {
-            // Init jmuxer for H.264 decode
-            jmuxerRef.current = new JMuxer({
-              node: videoRef.current,
-              mode: 'video',
-              fps: 30,
-              flushingTime: 0,
-              debug: false,
-            });
-          }
+          detectedCodec = info.codec;
+          setCodec(info.codec as any);
         } catch {}
         return;
       }
 
       frameCount.current++;
 
-      if (codec === 'h264' && jmuxerRef.current) {
-        // Feed H.264 NAL units to jmuxer
-        jmuxerRef.current.feed({ video: new Uint8Array(event.data) });
+      if (detectedCodec === 'h264') {
+        // Feed to jmuxer if ready
+        if (jmuxerRef.current) {
+          jmuxerRef.current.feed({ video: new Uint8Array(event.data) });
+        }
       } else {
-        // PNG fallback — render to canvas
+        // PNG fallback
         const blob = new Blob([event.data], { type: 'image/png' });
         const url = URL.createObjectURL(blob);
         const img = new Image();
@@ -82,12 +76,28 @@ export function LiveView() {
       }
     };
 
-    return () => {
-      ws.close();
-      jmuxerRef.current?.destroy();
-      jmuxerRef.current = null;
-    };
-  }, [id, codec]);
+    return () => { ws.close(); };
+  }, [id]);
+
+  // Init jmuxer after codec is detected and video element is rendered
+  useEffect(() => {
+    if (codec !== 'h264') return;
+    // Small delay to let React render the <video> element
+    const timer = setTimeout(() => {
+      if (videoRef.current && !jmuxerRef.current) {
+        jmuxerRef.current = new JMuxer({
+          node: videoRef.current,
+          mode: 'video',
+          fps: 30,
+          flushingTime: 0,
+          debug: false,
+        });
+        videoRef.current.play();
+        console.log('jmuxer initialized');
+      }
+    }, 100);
+    return () => { clearTimeout(timer); jmuxerRef.current?.destroy(); jmuxerRef.current = null; };
+  }, [codec]);
 
   // Input WebSocket
   useEffect(() => {
