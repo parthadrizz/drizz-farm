@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 	"github.com/drizz-dev/drizz-farm/internal/config"
 	"github.com/drizz-dev/drizz-farm/internal/daemon"
 	"github.com/drizz-dev/drizz-farm/internal/discovery"
+	"github.com/drizz-dev/drizz-farm/internal/federation"
 	"github.com/drizz-dev/drizz-farm/internal/health"
 	"github.com/drizz-dev/drizz-farm/internal/license"
 	"github.com/drizz-dev/drizz-farm/internal/pool"
@@ -122,8 +124,12 @@ func runStart(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("pool start: %w", err)
 	}
 
+	// Federation registry
+	fedRegistry := federation.NewRegistry(getLANIP(), cfg.API.Port)
+	fedRegistry.StartRefreshLoop(ctx, 10*time.Second)
+
 	// Session broker
-	broker := session.NewBroker(cfg, emulatorPool, dataStore)
+	broker := session.NewBroker(cfg, emulatorPool, dataStore, fedRegistry)
 	broker.Start(ctx)
 
 	// Health checker
@@ -158,12 +164,45 @@ func runStart(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Discover peers via mDNS and add to federation
+	if cfg.Network.MDNS.Enabled {
+		go func() {
+			time.Sleep(3 * time.Second) // Wait for own mDNS to settle
+			nodes, err := discovery.Browse(ctx, 5*time.Second)
+			if err == nil {
+				for _, n := range nodes {
+					fedRegistry.AddPeer(n.Name, n.Host, n.Port)
+				}
+				if len(nodes) > 0 {
+					log.Info().Int("peers", len(nodes)).Msg("federation: discovered peers")
+				}
+			}
+			// Re-discover every 30 seconds
+			ticker := time.NewTicker(30 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					nodes, err := discovery.Browse(ctx, 3*time.Second)
+					if err == nil {
+						for _, n := range nodes {
+							fedRegistry.AddPeer(n.Name, n.Host, n.Port)
+						}
+					}
+				}
+			}
+		}()
+	}
+
 	// API server
 	server := api.NewServer(cfg, emulatorPool, broker, lic, api.ServerDeps{
 		StartedAt: startedAt,
 		SDK:       sdk,
 		Runner:    runner,
-		Store:     dataStore,
+		Store:      dataStore,
+		Federation: fedRegistry,
 	})
 
 	errCh := make(chan error, 1)
@@ -216,4 +255,17 @@ func runStart(cmd *cobra.Command, args []string) error {
 	cancel()
 	log.Info().Dur("uptime", time.Since(startedAt)).Msg("drizz-farm stopped")
 	return nil
+}
+
+func getLANIP() string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return "127.0.0.1"
+	}
+	for _, addr := range addrs {
+		if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() && ipnet.IP.To4() != nil {
+			return ipnet.IP.String()
+		}
+	}
+	return "127.0.0.1"
 }

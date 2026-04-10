@@ -1,6 +1,8 @@
 package api
 
 import (
+	"net/http"
+
 	"github.com/go-chi/chi/v5"
 
 	"github.com/drizz-dev/drizz-farm/internal/android"
@@ -130,6 +132,16 @@ func RegisterRoutes(r chi.Router, cfg *config.Config, p *pool.Pool, b *session.B
 		r.Put("/config", cfgH.UpdateConfig)
 		r.Get("/config/raw", cfgH.GetConfigRaw)
 		r.Put("/config/raw", cfgH.SaveConfigRaw)
+
+		// Federation
+		r.Get("/federation/peers", func(w http.ResponseWriter, r *http.Request) {
+			if deps.Federation == nil {
+				JSON(w, 200, map[string]any{"peers": []any{}, "count": 0})
+				return
+			}
+			peers := deps.Federation.Peers()
+			JSON(w, 200, map[string]any{"peers": peers, "count": len(peers)})
+		})
 
 		// History
 		r.Get("/history/sessions", histH.SessionHistory)

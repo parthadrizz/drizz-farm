@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 
 	"github.com/drizz-dev/drizz-farm/internal/appium"
 	"github.com/drizz-dev/drizz-farm/internal/config"
+	"github.com/drizz-dev/drizz-farm/internal/federation"
 	"github.com/drizz-dev/drizz-farm/internal/pool"
 	"github.com/drizz-dev/drizz-farm/internal/store"
 	"github.com/drizz-dev/drizz-farm/internal/webhook"
@@ -28,20 +30,21 @@ type Broker struct {
 	mu       sync.RWMutex
 	sessions map[string]*Session
 
-	pool      *pool.Pool
-	queue     *Queue
-	cfg       *config.Config
-	store     *store.Store
-	webhook   *webhook.Sender
-	appium    *appium.Manager
-	hostIP    string
-	readyCh   chan struct{}
+	pool       *pool.Pool
+	queue      *Queue
+	cfg        *config.Config
+	store      *store.Store
+	webhook    *webhook.Sender
+	appium     *appium.Manager
+	federation *federation.Registry
+	hostIP     string
+	readyCh    chan struct{}
 
 	cancel context.CancelFunc
 }
 
 // NewBroker creates a new session broker.
-func NewBroker(cfg *config.Config, p *pool.Pool, s *store.Store) *Broker {
+func NewBroker(cfg *config.Config, p *pool.Pool, s *store.Store, fed *federation.Registry) *Broker {
 	queueTimeout := time.Duration(cfg.Pool.QueueTimeoutSeconds) * time.Second
 	readyCh := make(chan struct{}, 10) // buffered so notify never blocks
 
@@ -52,11 +55,12 @@ func NewBroker(cfg *config.Config, p *pool.Pool, s *store.Store) *Broker {
 	}
 
 	b := &Broker{
-		sessions: make(map[string]*Session),
-		pool:     p,
-		store:    s,
-		webhook:  webhook.NewSender(webhookURLs),
-		appium:   appium.NewManager(detectLANIP()),
+		sessions:   make(map[string]*Session),
+		pool:       p,
+		store:      s,
+		webhook:    webhook.NewSender(webhookURLs),
+		appium:     appium.NewManager(detectLANIP()),
+		federation: fed,
 		queue:    NewQueue(cfg.Pool.QueueMaxSize, queueTimeout),
 		cfg:      cfg,
 		hostIP:   detectLANIP(),
@@ -98,11 +102,53 @@ func (b *Broker) Create(ctx context.Context, req CreateSessionRequest) (*Session
 		return nil, fmt.Errorf("profile is required")
 	}
 
-	// Try to allocate from pool
+	// Try to allocate from local pool
 	inst, err := b.pool.Allocate(ctx, req.Profile)
 	if err != nil {
 		if errors.Is(err, pool.ErrPoolExhausted) {
-			log.Info().Str("profile", req.Profile).Msg("broker: pool exhausted, queueing request")
+			// Try federation peers before queueing
+			if b.federation != nil && b.federation.PeerCount() > 0 {
+				peer := b.federation.FindPeerWithCapacity()
+				if peer != nil {
+					log.Info().Str("peer", peer.Name).Str("host", peer.Host).Msg("broker: routing to peer")
+					result, fedErr := b.federation.CreateRemoteSession(peer, req.Profile)
+					if fedErr == nil {
+						// Store the remote session info so we can proxy release/artifacts
+						remoteSess := &Session{
+							ID:         result["id"].(string),
+							Profile:    req.Profile,
+							Platform:   req.Platform,
+							State:      SessionActive,
+							Source:     req.Source,
+							CreatedAt:  time.Now(),
+							ExpiresAt:  time.Now().Add(time.Duration(b.cfg.Pool.SessionTimeoutMinutes) * time.Minute),
+						}
+						// Extract connection info
+						if conn, ok := result["connection"].(map[string]any); ok {
+							remoteSess.Connection = ConnectionInfo{
+								Host:      fmt.Sprintf("%v", conn["host"]),
+								AppiumURL: fmt.Sprintf("%v", conn["appium_url"]),
+								ADBSerial: fmt.Sprintf("%v", conn["adb_serial"]),
+							}
+							if port, ok := conn["adb_port"].(float64); ok {
+								remoteSess.Connection.ADBPort = int(port)
+							}
+						}
+						// Track which node owns it
+						remoteSess.InstanceID = fmt.Sprintf("remote:%s:%d/%s", peer.Host, peer.Port, result["id"])
+
+						b.mu.Lock()
+						b.sessions[remoteSess.ID] = remoteSess
+						b.mu.Unlock()
+
+						log.Info().Str("session", remoteSess.ID).Str("peer", peer.Name).Msg("broker: remote session created")
+						return remoteSess, nil
+					}
+					log.Warn().Err(fedErr).Str("peer", peer.Name).Msg("broker: peer session failed")
+				}
+			}
+
+			log.Info().Str("profile", req.Profile).Msg("broker: pool exhausted (local + peers), queueing")
 			return b.queue.Enqueue(ctx, req)
 		}
 		return nil, fmt.Errorf("broker: allocate: %w", err)
@@ -146,6 +192,25 @@ func (b *Broker) Release(ctx context.Context, id string) error {
 		Str("instance", sess.InstanceID).
 		Dur("duration", now.Sub(sess.CreatedAt)).
 		Msg("broker: session released")
+
+	// If remote session, release on the remote node
+	if strings.HasPrefix(sess.InstanceID, "remote:") {
+		// Format: "remote:host:port/sessionID"
+		parts := strings.SplitN(strings.TrimPrefix(sess.InstanceID, "remote:"), "/", 2)
+		if len(parts) == 2 && b.federation != nil {
+			nodeAddr := parts[0]
+			remoteSessionID := parts[1]
+			if err := b.federation.ReleaseRemoteSession(nodeAddr, remoteSessionID); err != nil {
+				log.Warn().Err(err).Str("node", nodeAddr).Msg("broker: remote release failed")
+			}
+		}
+		// No local pool release needed
+		b.appium.Stop(id)
+		b.webhook.Send(webhook.Event{
+			Type: "session.released", SessionID: id, Duration: now.Sub(sess.CreatedAt).String(),
+		})
+		return nil
+	}
 
 	// Persist to SQLite
 	if b.store != nil {
