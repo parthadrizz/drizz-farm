@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api, DeviceInstance } from '../lib/api';
 
+type Tab = 'device' | 'input' | 'apps' | 'capture' | 'debug';
+
 export function LiveView() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -9,182 +11,13 @@ export function LiveView() {
   const wsRef = useRef<WebSocket | null>(null);
   const inputWsRef = useRef<WebSocket | null>(null);
   const [connected, setConnected] = useState(false);
+  const [inputConnected, setInputConnected] = useState(false);
   const [instance, setInstance] = useState<DeviceInstance | null>(null);
   const [fps, setFps] = useState(0);
   const frameCount = useRef(0);
+  const [activeTab, setActiveTab] = useState<Tab>('device');
 
-  // Load instance info
-  useEffect(() => {
-    api.pool().then(p => {
-      const inst = p.instances.find(i => i.id === id || i.session_id === id);
-      if (inst) setInstance(inst);
-    });
-  }, [id]);
-
-  // Screen WebSocket
-  useEffect(() => {
-    if (!id) return;
-
-    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${proto}//${window.location.host}/api/v1/sessions/${id}/screen`;
-    const ws = new WebSocket(wsUrl);
-    ws.binaryType = 'arraybuffer';
-    wsRef.current = ws;
-
-    ws.onopen = () => setConnected(true);
-    ws.onclose = () => setConnected(false);
-    ws.onerror = () => setConnected(false);
-
-    ws.onmessage = (event) => {
-      frameCount.current++;
-      const blob = new Blob([event.data], { type: 'image/png' });
-      const url = URL.createObjectURL(blob);
-      const img = new Image();
-      img.onload = () => {
-        const canvas = canvasRef.current;
-        if (!canvas) return;
-        canvas.width = img.width;
-        canvas.height = img.height;
-        const ctx = canvas.getContext('2d');
-        if (ctx) ctx.drawImage(img, 0, 0);
-        URL.revokeObjectURL(url);
-      };
-      img.src = url;
-    };
-
-    return () => ws.close();
-  }, [id]);
-
-  // Input WebSocket
-  const [inputConnected, setInputConnected] = useState(false);
-  useEffect(() => {
-    if (!id) return;
-
-    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${proto}//${window.location.host}/api/v1/sessions/${id}/input`;
-    const ws = new WebSocket(wsUrl);
-    inputWsRef.current = ws;
-    ws.onopen = () => { setInputConnected(true); console.log('input ws connected'); };
-    ws.onerror = (e) => { setInputConnected(false); console.error('input ws error', e); };
-    ws.onclose = () => { setInputConnected(false); };
-
-    return () => ws.close();
-  }, [id]);
-
-  // FPS counter
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setFps(frameCount.current);
-      frameCount.current = 0;
-    }, 1000);
-    return () => clearInterval(interval);
-  }, []);
-
-  // Input handlers
-  const sendInput = useCallback((cmd: string) => {
-    if (inputWsRef.current?.readyState === WebSocket.OPEN) {
-      inputWsRef.current.send(cmd);
-    }
-  }, []);
-
-  // Gesture tracking — tap vs swipe
-  const dragStart = useRef<{ x: number; y: number; time: number } | null>(null);
-
-  const canvasCoords = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return { x: 0, y: 0 };
-    const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-    return {
-      x: Math.round((e.clientX - rect.left) * scaleX),
-      y: Math.round((e.clientY - rect.top) * scaleY),
-    };
-  }, []);
-
-  const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    const { x, y } = canvasCoords(e);
-    dragStart.current = { x, y, time: Date.now() };
-  }, [canvasCoords]);
-
-  // Track mouse leaving canvas mid-drag
-  const handleMouseLeave = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (dragStart.current) {
-      // Mouse left canvas while dragging — complete the swipe
-      const start = dragStart.current;
-      const { x: endX, y: endY } = canvasCoords(e);
-      dragStart.current = null;
-      const swipeDuration = Math.max(150, Math.min(Date.now() - start.time, 2000));
-      sendInput(`swipe ${start.x} ${start.y} ${endX} ${endY} ${swipeDuration}`);
-    }
-  }, [canvasCoords, sendInput]);
-
-  const handleMouseUp = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!dragStart.current) return;
-    const start = dragStart.current;
-    const { x: endX, y: endY } = canvasCoords(e);
-    const dx = endX - start.x;
-    const dy = endY - start.y;
-    const dist = Math.sqrt(dx * dx + dy * dy);
-    const duration = Date.now() - start.time;
-    dragStart.current = null;
-
-    if (dist < 50) {
-      // Short distance = tap (50px in emulator coords ~ 11px on screen)
-      sendInput(`tap ${start.x} ${start.y}`);
-    } else {
-      // Swipe
-      const swipeDuration = Math.max(150, Math.min(duration, 2000));
-      sendInput(`swipe ${start.x} ${start.y} ${endX} ${endY} ${swipeDuration}`);
-    }
-  }, [canvasCoords, sendInput]);
-
-  // Pinch zoom — Alt+scroll on canvas
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const handleWheel = (e: WheelEvent) => {
-      if (!e.altKey) return; // Only zoom with Alt held
-      e.preventDefault();
-      const rect = canvas.getBoundingClientRect();
-      const scaleX = canvas.width / rect.width;
-      const scaleY = canvas.height / rect.height;
-      const cx = Math.round((e.clientX - rect.left) * scaleX);
-      const cy = Math.round((e.clientY - rect.top) * scaleY);
-      const dist = e.deltaY > 0 ? -200 : 200; // scroll down = zoom out, up = zoom in
-      // Simulate pinch: two opposite swipes from center
-      sendInput(`swipe ${cx - dist} ${cy - dist} ${cx + dist} ${cy + dist} 300`);
-    };
-    canvas.addEventListener('wheel', handleWheel, { passive: false });
-    return () => canvas.removeEventListener('wheel', handleWheel);
-  }, [sendInput]);
-
-  // Keyboard input — forward keystrokes to emulator
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Don't capture when typing in input fields
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) return;
-
-      e.preventDefault();
-      if (e.key === 'Backspace') { sendInput('key 67'); }
-      else if (e.key === 'Enter') { sendInput('key 66'); }
-      else if (e.key === 'Escape') { sendInput('back'); }
-      else if (e.key === 'Tab') { sendInput('key 61'); }
-      else if (e.key === 'ArrowUp') { sendInput('key 19'); }
-      else if (e.key === 'ArrowDown') { sendInput('key 20'); }
-      else if (e.key === 'ArrowLeft') { sendInput('key 21'); }
-      else if (e.key === 'ArrowRight') { sendInput('key 22'); }
-      else if (e.key.length === 1) {
-        // Regular character — type it
-        sendInput(`text ${e.key}`);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [sendInput]);
-
-  const [adbCmd, setAdbCmd] = useState('');
-  const [adbOutput, setAdbOutput] = useState('');
+  // State for controls
   const [activeGPS, setActiveGPS] = useState('');
   const [activeNetwork, setActiveNetwork] = useState('');
   const [activeBattery, setActiveBattery] = useState(0);
@@ -193,236 +26,390 @@ export function LiveView() {
   const [activeLocale, setActiveLocale] = useState('');
   const [recording, setRecording] = useState(false);
   const [harCapturing, setHarCapturing] = useState(false);
+  const [adbCmd, setAdbCmd] = useState('');
+  const [adbOutput, setAdbOutput] = useState('');
+  const [deviceInfo, setDeviceInfo] = useState<any>(null);
+
+  useEffect(() => { api.pool().then(p => { const inst = p.instances.find((i: DeviceInstance) => i.id === id || i.session_id === id); if (inst) setInstance(inst); }); }, [id]);
+
+  // Screen WebSocket
+  useEffect(() => {
+    if (!id) return;
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${proto}//${window.location.host}/api/v1/sessions/${id}/screen`);
+    ws.binaryType = 'arraybuffer';
+    wsRef.current = ws;
+    ws.onopen = () => setConnected(true);
+    ws.onclose = () => setConnected(false);
+    ws.onmessage = (event) => {
+      frameCount.current++;
+      const blob = new Blob([event.data], { type: 'image/png' });
+      const url = URL.createObjectURL(blob);
+      const img = new Image();
+      img.onload = () => { const c = canvasRef.current; if (!c) return; c.width = img.width; c.height = img.height; c.getContext('2d')?.drawImage(img, 0, 0); URL.revokeObjectURL(url); };
+      img.src = url;
+    };
+    return () => ws.close();
+  }, [id]);
+
+  // Input WebSocket
+  useEffect(() => {
+    if (!id) return;
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${proto}//${window.location.host}/api/v1/sessions/${id}/input`);
+    inputWsRef.current = ws;
+    ws.onopen = () => setInputConnected(true);
+    ws.onclose = () => setInputConnected(false);
+    return () => ws.close();
+  }, [id]);
+
+  useEffect(() => { const i = setInterval(() => { setFps(frameCount.current); frameCount.current = 0; }, 1000); return () => clearInterval(i); }, []);
+
+  const sendInput = useCallback((cmd: string) => { if (inputWsRef.current?.readyState === WebSocket.OPEN) inputWsRef.current.send(cmd); }, []);
+
+  // Gestures
+  const dragStart = useRef<{ x: number; y: number; time: number } | null>(null);
+  const canvasCoords = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    const c = canvasRef.current; if (!c) return { x: 0, y: 0 };
+    const r = c.getBoundingClientRect();
+    return { x: Math.round((e.clientX - r.left) * c.width / r.width), y: Math.round((e.clientY - r.top) * c.height / r.height) };
+  }, []);
+  const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => { dragStart.current = { ...canvasCoords(e), time: Date.now() }; }, [canvasCoords]);
+  const handleMouseUp = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!dragStart.current) return;
+    const s = dragStart.current; const end = canvasCoords(e); dragStart.current = null;
+    const dist = Math.sqrt((end.x-s.x)**2 + (end.y-s.y)**2);
+    if (dist < 50) sendInput(`tap ${s.x} ${s.y}`);
+    else sendInput(`swipe ${s.x} ${s.y} ${end.x} ${end.y} ${Math.max(150, Math.min(Date.now()-s.time, 2000))}`);
+  }, [canvasCoords, sendInput]);
+  const handleMouseLeave = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!dragStart.current) return;
+    const s = dragStart.current; const end = canvasCoords(e); dragStart.current = null;
+    sendInput(`swipe ${s.x} ${s.y} ${end.x} ${end.y} ${Math.max(150, Math.min(Date.now()-s.time, 2000))}`);
+  }, [canvasCoords, sendInput]);
+
+  // Keyboard
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) return;
+      e.preventDefault();
+      const keys: Record<string, string> = { Backspace: 'key 67', Enter: 'key 66', Escape: 'back', Tab: 'key 61', ArrowUp: 'key 19', ArrowDown: 'key 20', ArrowLeft: 'key 21', ArrowRight: 'key 22' };
+      if (keys[e.key]) sendInput(keys[e.key]);
+      else if (e.key.length === 1) sendInput(`text ${e.key}`);
+    };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [sendInput]);
+
+  // Helpers
+  const exec = async (cmd: string) => { if (id) { const r = await api.execADB(id, cmd); return r.output || ''; } return ''; };
+  const chip = (label: string, active: boolean, onClick: () => void) => (
+    <button key={label} onClick={onClick} className={`px-2 py-1 rounded text-[10px] transition ${active ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/50' : 'bg-gray-800 text-gray-300 border border-transparent hover:bg-gray-700'}`}>{label}</button>
+  );
+
+  const tabs: { id: Tab; label: string }[] = [
+    { id: 'device', label: 'Device' },
+    { id: 'input', label: 'Input' },
+    { id: 'apps', label: 'Apps' },
+    { id: 'capture', label: 'Capture' },
+    { id: 'debug', label: 'Debug' },
+  ];
 
   return (
     <div className="flex gap-4">
-      {/* Left: Screen — fixed width */}
+      {/* Left: Screen */}
       <div className="w-[260px] flex-shrink-0">
-        <div className="flex items-center gap-3 mb-2">
-          <button onClick={() => navigate('/')} className="text-xs text-gray-500 hover:text-gray-300">← Back</button>
+        <div className="flex items-center gap-2 mb-2">
+          <button onClick={() => navigate('/')} className="text-[10px] text-gray-500 hover:text-gray-300">← Back</button>
           <span className="text-xs font-mono text-purple-400">{instance?.device_name || id}</span>
           <div className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-emerald-400' : 'bg-red-400'}`} />
-          <span className="text-[10px] text-gray-600">{connected ? `${fps} fps` : 'disconnected'}{inputConnected ? '' : ' · no input'}</span>
+          <span className="text-[9px] text-gray-600">{connected ? `${fps}fps` : 'off'}{inputConnected ? '' : ' · no input'}</span>
         </div>
         <div className="bg-gray-900 border border-gray-800 rounded-lg p-1 inline-block">
           {!connected ? (
-            <div className="w-[240px] h-[533px] flex items-center justify-center text-gray-500">
-              <div className="animate-spin w-5 h-5 border-2 border-gray-600 border-t-emerald-400 rounded-full" />
-            </div>
+            <div className="w-[240px] h-[533px] flex items-center justify-center"><div className="animate-spin w-5 h-5 border-2 border-gray-600 border-t-emerald-400 rounded-full" /></div>
           ) : (
-            <canvas ref={canvasRef}
-              onMouseDown={handleMouseDown}
-              onMouseUp={handleMouseUp}
-              onMouseLeave={handleMouseLeave}
+            <canvas ref={canvasRef} onMouseDown={handleMouseDown} onMouseUp={handleMouseUp} onMouseLeave={handleMouseLeave}
               className="w-[240px] h-[533px] cursor-crosshair rounded select-none" style={{ imageRendering: 'auto' }} />
           )}
         </div>
         <div className="flex gap-1 mt-2 justify-center flex-wrap">
-          <button onClick={() => sendInput('back')} className="px-2 py-1 bg-gray-800 rounded text-[10px] hover:bg-gray-700">◀ Back</button>
-          <button onClick={() => sendInput('home')} className="px-2 py-1 bg-gray-800 rounded text-[10px] hover:bg-gray-700">● Home</button>
-          <button onClick={() => sendInput('recent')} className="px-2 py-1 bg-gray-800 rounded text-[10px] hover:bg-gray-700">■ Recent</button>
-          <button onClick={() => sendInput('key 26')} className="px-2 py-1 bg-gray-800 rounded text-[10px] hover:bg-gray-700">⏻ Power</button>
-          <button onClick={async () => {
-            if (!id) return;
-            const r = await api.execADB(id, "dumpsys activity recents | grep realActivity");
-            const lines = (r.output||'').split('\n');
-            const pkgs = new Set<string>();
-            for (const line of lines) {
-              const m = line.match(/realActivity=\{?([^/}]+)/);
-              if (m) pkgs.add(m[1].trim());
-            }
-            const skip = ['com.google.android.apps.nexuslauncher','com.android.launcher3'];
-            for (const pkg of pkgs) { if (!skip.includes(pkg)) await api.execADB(id, `am force-stop ${pkg}`); }
-          }} className="px-3 py-1 bg-red-900/50 text-red-400 rounded text-[10px] hover:bg-red-900/70">✕ Close All</button>
+          <NavBtn onClick={() => sendInput('back')}>◀ Back</NavBtn>
+          <NavBtn onClick={() => sendInput('home')}>● Home</NavBtn>
+          <NavBtn onClick={() => sendInput('recent')}>■ Recent</NavBtn>
+          <NavBtn onClick={() => sendInput('key 26')}>⏻</NavBtn>
+          <button onClick={async () => { if (!id) return; const r = await api.execADB(id, "dumpsys activity recents | grep realActivity"); const lines = (r.output||'').split('\n'); const pkgs = new Set<string>(); for (const l of lines) { const m = l.match(/realActivity=\{?([^/}]+)/); if (m) pkgs.add(m[1].trim()); } const skip = ['com.google.android.apps.nexuslauncher','com.android.launcher3']; for (const pkg of pkgs) { if (!skip.includes(pkg)) await api.execADB(id, `am force-stop ${pkg}`); } }}
+            className="px-2 py-1 bg-red-900/50 text-red-400 rounded text-[10px] hover:bg-red-900/70">✕ Close All</button>
         </div>
       </div>
 
-      {/* Right: Controls */}
-      <div className="flex-1 space-y-3 overflow-y-auto max-h-[600px]">
-        {/* GPS */}
-        <Panel title="GPS">
-          <div className="flex gap-2 flex-wrap mb-2">
-            {[
-              { label: 'San Francisco', lat: 37.7749, lng: -122.4194 },
-              { label: 'New York', lat: 40.7128, lng: -74.006 },
-              { label: 'London', lat: 51.5074, lng: -0.1278 },
-              { label: 'Tokyo', lat: 35.6762, lng: 139.6503 },
-              { label: 'Mumbai', lat: 19.076, lng: 72.8777 },
-              { label: 'Bangalore', lat: 12.9716, lng: 77.5946 },
-            ].map(loc => (
-              <Chip key={loc.label} active={activeGPS === loc.label} onClick={() => { if (id) { api.setGPS(id, loc.lat, loc.lng); setActiveGPS(loc.label); } }}>{loc.label}</Chip>
-            ))}
-          </div>
-          <div className="flex gap-2 items-center">
-            <input type="text" placeholder="lat" id="gps-lat" className="w-20 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-[10px] font-mono focus:outline-none focus:border-emerald-400" />
-            <input type="text" placeholder="lng" id="gps-lng" className="w-20 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-[10px] font-mono focus:outline-none focus:border-emerald-400" />
-            <button onClick={() => {
-              const lat = parseFloat((document.getElementById('gps-lat') as HTMLInputElement)?.value);
-              const lng = parseFloat((document.getElementById('gps-lng') as HTMLInputElement)?.value);
-              if (id && !isNaN(lat) && !isNaN(lng)) { api.setGPS(id, lat, lng); setActiveGPS(`${lat},${lng}`); }
-            }} className="px-2 py-1 bg-emerald-500/20 text-emerald-400 border border-emerald-500/50 rounded text-[10px] hover:bg-emerald-500/30">Set</button>
-          </div>
-        </Panel>
-
-        {/* Network + Battery side by side */}
-        <div className="grid grid-cols-2 gap-3">
-          <Panel title="Network">
-            <div className="flex gap-1.5 flex-wrap">
-              {['2g', '3g', '4g', '5g', 'wifi_slow', 'wifi_fast', 'offline'].map(p => (
-                <Chip key={p} active={activeNetwork === p} onClick={() => { if (id) { api.setNetwork(id, p); setActiveNetwork(p); } }}>{p}</Chip>
-              ))}
-            </div>
-          </Panel>
-          <Panel title="Battery">
-            <div className="flex gap-1.5 flex-wrap">
-              {[100, 75, 50, 25, 10, 5].map(l => (
-                <Chip key={l} active={activeBattery === l} onClick={() => { if (id) { api.setBattery(id, l, l > 20 ? 'ac' : 'none'); setActiveBattery(l); } }}>{l}%</Chip>
-              ))}
-            </div>
-          </Panel>
+      {/* Right: Tabbed Controls */}
+      <div className="flex-1 min-w-0">
+        {/* Tab bar */}
+        <div className="flex gap-1 mb-3 border-b border-gray-800 pb-px">
+          {tabs.map(t => (
+            <button key={t.id} onClick={() => setActiveTab(t.id)}
+              className={`px-3 py-1.5 text-[10px] font-medium border-b-2 transition ${activeTab === t.id ? 'border-emerald-400 text-emerald-400' : 'border-transparent text-gray-500 hover:text-gray-300'}`}>{t.label}</button>
+          ))}
         </div>
 
-        {/* Orientation + Appearance + Locale side by side */}
-        <div className="grid grid-cols-3 gap-3">
-          <Panel title="Orientation">
-            <div className="flex gap-1.5 flex-wrap">
-              {[
-                { label: '↑', r: 0 },
-                { label: '←', r: 1 },
-                { label: '↓', r: 2 },
-                { label: '→', r: 3 },
-              ].map(o => (
-                <Chip key={o.r} active={activeRotation === o.r} onClick={() => { if (id) { api.setOrientation(id, o.r); setActiveRotation(o.r); } }}>{o.label}</Chip>
-              ))}
+        <div className="space-y-3 overflow-y-auto max-h-[550px]">
+          {/* ===== DEVICE TAB ===== */}
+          {activeTab === 'device' && <>
+            <Panel title="GPS">
+              <div className="flex gap-1.5 flex-wrap mb-2">
+                {[{ l: 'San Francisco', lat: 37.7749, lng: -122.4194 }, { l: 'New York', lat: 40.7128, lng: -74.006 }, { l: 'London', lat: 51.5074, lng: -0.1278 }, { l: 'Tokyo', lat: 35.6762, lng: 139.6503 }, { l: 'Mumbai', lat: 19.076, lng: 72.8777 }, { l: 'Bangalore', lat: 12.9716, lng: 77.5946 }].map(loc => chip(loc.l, activeGPS === loc.l, () => { if (id) { api.setGPS(id, loc.lat, loc.lng); setActiveGPS(loc.l); } }))}
+              </div>
+              <div className="flex gap-2 items-center">
+                <input type="text" placeholder="lat" id="gps-lat" className="w-20 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-[10px] font-mono focus:outline-none focus:border-emerald-400" />
+                <input type="text" placeholder="lng" id="gps-lng" className="w-20 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-[10px] font-mono focus:outline-none focus:border-emerald-400" />
+                <button onClick={() => { const lat = parseFloat((document.getElementById('gps-lat') as HTMLInputElement)?.value); const lng = parseFloat((document.getElementById('gps-lng') as HTMLInputElement)?.value); if (id && !isNaN(lat) && !isNaN(lng)) { api.setGPS(id, lat, lng); setActiveGPS(`${lat},${lng}`); } }} className="px-2 py-1 bg-emerald-500/20 text-emerald-400 border border-emerald-500/50 rounded text-[10px]">Set</button>
+              </div>
+            </Panel>
+            <div className="grid grid-cols-2 gap-3">
+              <Panel title="Network">
+                <div className="flex gap-1 flex-wrap">{['2g','3g','4g','5g','wifi_slow','wifi_fast','offline'].map(p => chip(p, activeNetwork===p, () => { if(id){api.setNetwork(id,p);setActiveNetwork(p)} }))}</div>
+              </Panel>
+              <Panel title="Battery">
+                <div className="flex gap-1 flex-wrap">{[100,75,50,25,10,5].map(l => chip(`${l}%`, activeBattery===l, () => { if(id){api.setBattery(id,l,l>20?'ac':'none');setActiveBattery(l)} }))}</div>
+              </Panel>
             </div>
-          </Panel>
-          <Panel title="Appearance">
-            <div className="flex gap-1.5">
-              <Chip active={activeDark === true} onClick={() => { if (id) { api.setDarkMode(id, true); setActiveDark(true); } }}>Dark</Chip>
-              <Chip active={activeDark === false} onClick={() => { if (id) { api.setDarkMode(id, false); setActiveDark(false); } }}>Light</Chip>
+            <div className="grid grid-cols-3 gap-3">
+              <Panel title="Orientation">
+                <div className="flex gap-1 flex-wrap">{[{l:'↑',r:0},{l:'←',r:1},{l:'↓',r:2},{l:'→',r:3}].map(o => chip(o.l, activeRotation===o.r, () => { if(id){api.setOrientation(id,o.r);setActiveRotation(o.r)} }))}</div>
+              </Panel>
+              <Panel title="Appearance">
+                <div className="flex gap-1">
+                  {chip('Dark', activeDark===true, () => { if(id){api.setDarkMode(id,true);setActiveDark(true)} })}
+                  {chip('Light', activeDark===false, () => { if(id){api.setDarkMode(id,false);setActiveDark(false)} })}
+                </div>
+              </Panel>
+              <Panel title="Locale">
+                <select value={activeLocale} onChange={e => { if(id){api.setLocale(id,e.target.value);setActiveLocale(e.target.value)} }}
+                  className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-[10px] font-mono focus:outline-none focus:border-emerald-400">
+                  <option value="">Select...</option>
+                  {['en-US','ja-JP','hi-IN','de-DE','fr-FR','zh-CN','ar-SA','ko-KR','es-ES','pt-BR','ru-RU','it-IT','nl-NL','sv-SE','th-TH','vi-VN','id-ID','ms-MY','tr-TR'].map(l => <option key={l} value={l}>{l}</option>)}
+                </select>
+              </Panel>
             </div>
-          </Panel>
-          <Panel title="Locale">
-            <select value={activeLocale} onChange={e => { if (id) { api.setLocale(id, e.target.value); setActiveLocale(e.target.value); } }}
-              className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-[10px] font-mono focus:outline-none focus:border-emerald-400">
-              <option value="">Select...</option>
-              {['en-US','en-GB','es-ES','es-MX','pt-BR','fr-FR','de-DE','it-IT','nl-NL','ru-RU','pl-PL','tr-TR',
-                'ja-JP','ko-KR','zh-CN','zh-TW','hi-IN','bn-IN','ta-IN','te-IN','mr-IN','gu-IN','kn-IN','ml-IN',
-                'ar-SA','he-IL','th-TH','vi-VN','id-ID','ms-MY','fil-PH','sv-SE','da-DK','nb-NO','fi-FI',
-                'uk-UA','cs-CZ','ro-RO','hu-HU','el-GR','bg-BG','hr-HR','sk-SK','sl-SI',
-                'sw-KE','am-ET','af-ZA'].map(l => (
-                <option key={l} value={l}>{l}</option>
-              ))}
-            </select>
-          </Panel>
+            <div className="grid grid-cols-2 gap-3">
+              <Panel title="Timezone">
+                <select onChange={e => { if(id) api.execADB(id, `setprop persist.sys.timezone ${e.target.value}`) }}
+                  className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-[10px] font-mono focus:outline-none focus:border-emerald-400">
+                  <option value="">Select...</option>
+                  {['America/New_York','America/Chicago','America/Denver','America/Los_Angeles','Europe/London','Europe/Paris','Europe/Berlin','Asia/Tokyo','Asia/Shanghai','Asia/Kolkata','Asia/Dubai','Australia/Sydney','Pacific/Auckland'].map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </Panel>
+              <Panel title="Brightness">
+                <input type="range" min={0} max={255} defaultValue={128} onChange={e => { if(id) api.execADB(id, `settings put system screen_brightness ${e.target.value}`) }}
+                  className="w-full accent-emerald-400 h-1.5" />
+              </Panel>
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <Panel title="Font Scale">
+                <div className="flex gap-1 flex-wrap">{[{l:'S',v:0.85},{l:'M',v:1.0},{l:'L',v:1.3},{l:'XL',v:1.5}].map(f => (
+                  <button key={f.l} onClick={() => { if(id) api.execADB(id, `settings put system font_scale ${f.v}`) }} className="px-2 py-1 bg-gray-800 rounded text-[10px] hover:bg-gray-700">{f.l}</button>
+                ))}</div>
+              </Panel>
+              <Panel title="WiFi">
+                <div className="flex gap-1">
+                  <button onClick={() => { if(id) api.execADB(id, 'svc wifi enable') }} className="px-2 py-1 bg-emerald-800/50 text-emerald-400 rounded text-[10px]">On</button>
+                  <button onClick={() => { if(id) api.execADB(id, 'svc wifi disable') }} className="px-2 py-1 bg-red-800/50 text-red-400 rounded text-[10px]">Off</button>
+                </div>
+              </Panel>
+              <Panel title="Animations">
+                <div className="flex gap-1">
+                  <button onClick={() => { if(id) { api.execADB(id, 'settings put global window_animation_scale 0'); api.execADB(id, 'settings put global transition_animation_scale 0'); api.execADB(id, 'settings put global animator_duration_scale 0'); } }} className="px-2 py-1 bg-red-800/50 text-red-400 rounded text-[10px]">Off</button>
+                  <button onClick={() => { if(id) { api.execADB(id, 'settings put global window_animation_scale 1'); api.execADB(id, 'settings put global transition_animation_scale 1'); api.execADB(id, 'settings put global animator_duration_scale 1'); } }} className="px-2 py-1 bg-emerald-800/50 text-emerald-400 rounded text-[10px]">On</button>
+                </div>
+              </Panel>
+            </div>
+            <Panel title="Accessibility">
+              <div className="flex gap-1">
+                <button onClick={() => { if(id) { api.execADB(id, 'settings put secure enabled_accessibility_services com.google.android.marvin.talkback/com.google.android.marvin.talkback.TalkBackService'); api.execADB(id, 'settings put secure accessibility_enabled 1'); } }} className="px-2 py-1 bg-gray-800 rounded text-[10px] hover:bg-gray-700">TalkBack On</button>
+                <button onClick={() => { if(id) { api.execADB(id, 'settings put secure enabled_accessibility_services ""'); api.execADB(id, 'settings put secure accessibility_enabled 0'); } }} className="px-2 py-1 bg-gray-800 rounded text-[10px] hover:bg-gray-700">TalkBack Off</button>
+              </div>
+            </Panel>
+          </>}
+
+          {/* ===== INPUT TAB ===== */}
+          {activeTab === 'input' && <>
+            <Panel title="D-Pad">
+              <div className="flex justify-center">
+                <div className="grid grid-cols-3 gap-1 w-fit">
+                  <div /><NavBtn onClick={() => sendInput('key 19')}>▲</NavBtn><div />
+                  <NavBtn onClick={() => sendInput('key 21')}>◀</NavBtn>
+                  <NavBtn onClick={() => sendInput('key 23')}>●</NavBtn>
+                  <NavBtn onClick={() => sendInput('key 22')}>▶</NavBtn>
+                  <div /><NavBtn onClick={() => sendInput('key 20')}>▼</NavBtn><div />
+                </div>
+              </div>
+            </Panel>
+            <div className="grid grid-cols-2 gap-3">
+              <Panel title="Volume">
+                <div className="flex gap-1">{[{l:'🔈 Down',k:'key 25'},{l:'🔊 Up',k:'key 24'},{l:'🔇 Mute',k:'key 164'}].map(v => (
+                  <button key={v.l} onClick={() => sendInput(v.k)} className="px-2 py-1 bg-gray-800 rounded text-[10px] hover:bg-gray-700">{v.l}</button>
+                ))}</div>
+              </Panel>
+              <Panel title="Lock/Unlock">
+                <div className="flex gap-1">
+                  <button onClick={() => sendInput('key 26')} className="px-2 py-1 bg-gray-800 rounded text-[10px] hover:bg-gray-700">Lock</button>
+                  <button onClick={() => { sendInput('key 224'); setTimeout(() => { if(id) api.execADB(id, 'input swipe 540 1800 540 800 300'); }, 500); }} className="px-2 py-1 bg-gray-800 rounded text-[10px] hover:bg-gray-700">Unlock</button>
+                </div>
+              </Panel>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Panel title="Biometric">
+                <div className="flex gap-1">
+                  <button onClick={() => { if(id) api.execADB(id, 'emu finger touch 1') }} className="px-2 py-1 bg-emerald-800/50 text-emerald-400 rounded text-[10px]">Touch OK</button>
+                  <button onClick={() => { if(id) api.execADB(id, 'emu finger touch bad') }} className="px-2 py-1 bg-red-800/50 text-red-400 rounded text-[10px]">Fail</button>
+                </div>
+              </Panel>
+              <Panel title="Shake">
+                <button onClick={() => { if(id) { api.execADB(id, 'emu sensor set acceleration 0:15:0'); setTimeout(() => { if(id) api.execADB(id, 'emu sensor set acceleration 0:0:9.8'); }, 200); } }} className="px-2 py-1 bg-gray-800 rounded text-[10px] hover:bg-gray-700">Shake Device</button>
+              </Panel>
+            </div>
+            <Panel title="Phone Call">
+              <div className="flex gap-1.5">
+                <input type="text" placeholder="+1234567890" id="phone-num" className="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-[10px] font-mono focus:outline-none focus:border-emerald-400" />
+                <button onClick={() => { const n=(document.getElementById('phone-num') as HTMLInputElement)?.value; if(id&&n) api.execADB(id,`emu gsm call ${n}`); }} className="px-2 py-1 bg-emerald-500/20 text-emerald-400 rounded text-[10px]">Call</button>
+              </div>
+            </Panel>
+            <Panel title="SMS">
+              <div className="flex gap-1.5">
+                <input type="text" placeholder="Message..." id="sms-text" className="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-[10px] focus:outline-none focus:border-emerald-400" />
+                <button onClick={() => { const t=(document.getElementById('sms-text') as HTMLInputElement)?.value; if(id&&t) api.execADB(id,`emu sms send 1234567890 ${t}`); }} className="px-2 py-1 bg-blue-500/20 text-blue-400 rounded text-[10px]">Send</button>
+              </div>
+            </Panel>
+            <Panel title="Clipboard">
+              <div className="flex gap-1.5">
+                <input type="text" placeholder="Text to set..." id="clip-text" className="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-[10px] focus:outline-none focus:border-emerald-400" />
+                <button onClick={() => { const t=(document.getElementById('clip-text') as HTMLInputElement)?.value; if(id&&t) api.execADB(id,`input text '${t}'`); }} className="px-2 py-1 bg-gray-700 rounded text-[10px]">Set</button>
+              </div>
+            </Panel>
+            <Panel title="Sensors">
+              <div className="grid grid-cols-2 gap-2">
+                <div><div className="text-[9px] text-gray-500 mb-1">Accelerometer</div>
+                  <input type="text" placeholder="x:y:z" defaultValue="0:0:9.8" id="sensor-accel" className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-[10px] font-mono focus:outline-none focus:border-emerald-400" />
+                  <button onClick={() => { const v=(document.getElementById('sensor-accel') as HTMLInputElement)?.value; if(id&&v) api.execADB(id,`emu sensor set acceleration ${v}`); }} className="mt-1 px-2 py-0.5 bg-gray-800 rounded text-[9px] hover:bg-gray-700">Apply</button>
+                </div>
+                <div><div className="text-[9px] text-gray-500 mb-1">Gyroscope</div>
+                  <input type="text" placeholder="x:y:z" defaultValue="0:0:0" id="sensor-gyro" className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-[10px] font-mono focus:outline-none focus:border-emerald-400" />
+                  <button onClick={() => { const v=(document.getElementById('sensor-gyro') as HTMLInputElement)?.value; if(id&&v) api.execADB(id,`emu sensor set gyroscope ${v}`); }} className="mt-1 px-2 py-0.5 bg-gray-800 rounded text-[9px] hover:bg-gray-700">Apply</button>
+                </div>
+              </div>
+            </Panel>
+          </>}
+
+          {/* ===== APPS TAB ===== */}
+          {activeTab === 'apps' && <>
+            <Panel title="Install APK">
+              <div className="flex gap-1.5">
+                <input type="text" placeholder="/path/to/app.apk" id="apk-path" className="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-[10px] font-mono focus:outline-none focus:border-emerald-400" />
+                <button onClick={() => { const p=(document.getElementById('apk-path') as HTMLInputElement)?.value; if(id&&p) api.execADB(id,`pm install -g ${p}`); }} className="px-2 py-1 bg-emerald-500/20 text-emerald-400 rounded text-[10px]">Install</button>
+              </div>
+            </Panel>
+            <Panel title="App Management">
+              <div className="space-y-2">
+                <div className="flex gap-1.5">
+                  <input type="text" placeholder="com.example.app" id="pkg-name" className="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-[10px] font-mono focus:outline-none focus:border-emerald-400" />
+                </div>
+                <div className="flex gap-1 flex-wrap">
+                  <button onClick={() => { const p=(document.getElementById('pkg-name') as HTMLInputElement)?.value; if(id&&p) api.execADB(id,`monkey -p ${p} -c android.intent.category.LAUNCHER 1`); }} className="px-2 py-1 bg-emerald-800/50 text-emerald-400 rounded text-[10px]">Launch</button>
+                  <button onClick={() => { const p=(document.getElementById('pkg-name') as HTMLInputElement)?.value; if(id&&p) api.execADB(id,`am force-stop ${p}`); }} className="px-2 py-1 bg-red-800/50 text-red-400 rounded text-[10px]">Force Stop</button>
+                  <button onClick={() => { const p=(document.getElementById('pkg-name') as HTMLInputElement)?.value; if(id&&p) api.execADB(id,`pm clear ${p}`); }} className="px-2 py-1 bg-orange-800/50 text-orange-400 rounded text-[10px]">Clear Data</button>
+                  <button onClick={() => { const p=(document.getElementById('pkg-name') as HTMLInputElement)?.value; if(id&&p) api.execADB(id,`pm uninstall ${p}`); }} className="px-2 py-1 bg-red-800/50 text-red-400 rounded text-[10px]">Uninstall</button>
+                </div>
+              </div>
+            </Panel>
+            <Panel title="Permissions">
+              <div className="space-y-1.5">
+                <input type="text" placeholder="com.example.app" id="perm-pkg" className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-[10px] font-mono focus:outline-none focus:border-emerald-400" />
+                <div className="flex gap-1 flex-wrap">
+                  {['CAMERA','RECORD_AUDIO','ACCESS_FINE_LOCATION','READ_CONTACTS','READ_EXTERNAL_STORAGE','WRITE_EXTERNAL_STORAGE'].map(perm => (
+                    <button key={perm} onClick={() => { const p=(document.getElementById('perm-pkg') as HTMLInputElement)?.value; if(id&&p) api.execADB(id,`pm grant ${p} android.permission.${perm}`); }}
+                      className="px-1.5 py-0.5 bg-gray-800 rounded text-[9px] font-mono hover:bg-gray-700">{perm}</button>
+                  ))}
+                </div>
+              </div>
+            </Panel>
+            <Panel title="Deep Link">
+              <div className="flex gap-1.5">
+                <input type="text" placeholder="https://..." id="deeplink-url" className="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-[10px] focus:outline-none focus:border-emerald-400"
+                  onKeyDown={e => { if (e.key === 'Enter' && id) api.openDeeplink(id, (e.target as HTMLInputElement).value); }} />
+                <button onClick={() => { const u=(document.getElementById('deeplink-url') as HTMLInputElement)?.value; if(id&&u) api.openDeeplink(id,u); }} className="px-2 py-1 bg-blue-500/20 text-blue-400 rounded text-[10px]">Open</button>
+              </div>
+            </Panel>
+          </>}
+
+          {/* ===== CAPTURE TAB ===== */}
+          {activeTab === 'capture' && <>
+            <div className="grid grid-cols-3 gap-3">
+              <Panel title="Video">
+                {!recording ? (
+                  <button onClick={async () => { if(id){await api.startRecording(id);setRecording(true)} }} className="w-full px-2 py-1.5 bg-red-500/20 text-red-400 rounded text-[10px]">● Record</button>
+                ) : (
+                  <button onClick={async () => { if(id){await api.stopRecording(id);setRecording(false)} }} className="w-full px-2 py-1.5 bg-red-500 text-white rounded text-[10px] animate-pulse">■ Stop</button>
+                )}
+              </Panel>
+              <Panel title="Network">
+                {!harCapturing ? (
+                  <button onClick={async () => { if(id){await api.startHAR(id);setHarCapturing(true)} }} className="w-full px-2 py-1.5 bg-blue-500/20 text-blue-400 rounded text-[10px]">Capture</button>
+                ) : (
+                  <button onClick={async () => { if(id){await api.stopHAR(id);setHarCapturing(false)} }} className="w-full px-2 py-1.5 bg-blue-500 text-white rounded text-[10px] animate-pulse">■ Stop</button>
+                )}
+              </Panel>
+              <Panel title="Screenshot">
+                <button onClick={async () => { if(!id) return; const blob = await api.takeScreenshot(id); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href=url; a.download=`screenshot_${Date.now()}.png`; a.click(); URL.revokeObjectURL(url); }}
+                  className="w-full px-2 py-1.5 bg-gray-700 text-gray-300 rounded text-[10px] hover:bg-gray-600">Capture</button>
+              </Panel>
+            </div>
+            <Panel title="Snapshots">
+              <div className="flex gap-1.5">
+                <input type="text" placeholder="snapshot name" id="snap-name" className="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-[10px] font-mono focus:outline-none focus:border-emerald-400" />
+                <button onClick={() => { const n=(document.getElementById('snap-name') as HTMLInputElement)?.value; if(id&&n) api.execADB(id,`emu avd snapshot save ${n}`); }} className="px-2 py-1 bg-emerald-500/20 text-emerald-400 rounded text-[10px]">Save</button>
+                <button onClick={() => { const n=(document.getElementById('snap-name') as HTMLInputElement)?.value; if(id&&n) api.execADB(id,`emu avd snapshot load ${n}`); }} className="px-2 py-1 bg-blue-500/20 text-blue-400 rounded text-[10px]">Restore</button>
+              </div>
+            </Panel>
+            <LogcatPanel instanceId={id || ''} />
+          </>}
+
+          {/* ===== DEBUG TAB ===== */}
+          {activeTab === 'debug' && <>
+            <Panel title="ADB Shell">
+              <div className="flex gap-1.5">
+                <input type="text" placeholder="shell command..." value={adbCmd} onChange={e => setAdbCmd(e.target.value)}
+                  className="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-[10px] font-mono focus:outline-none focus:border-emerald-400"
+                  onKeyDown={async e => { if (e.key==='Enter'&&id&&adbCmd) { const r=await api.execADB(id,adbCmd); setAdbOutput(r.output||r.error||''); setAdbCmd(''); } }} />
+              </div>
+              {adbOutput && <pre className="mt-1 text-[9px] text-gray-500 font-mono bg-gray-950 p-2 rounded max-h-32 overflow-auto">{adbOutput}</pre>}
+            </Panel>
+            <Panel title="Device Info">
+              <button onClick={async () => { if(id) { const r = await fetch(`/api/v1/sessions/${id}/device-info`); setDeviceInfo(await r.json()); } }} className="px-2 py-1 bg-gray-800 rounded text-[10px] hover:bg-gray-700 mb-2">Refresh</button>
+              {deviceInfo && <pre className="text-[9px] text-gray-500 font-mono bg-gray-950 p-2 rounded max-h-40 overflow-auto">{JSON.stringify(deviceInfo, null, 2)}</pre>}
+            </Panel>
+            <Panel title="Notifications">
+              <button onClick={async () => { if(id) { const r = await api.execADB(id, 'dumpsys notification --noredact | grep -A2 NotificationRecord | head -20'); setAdbOutput(r.output||'none'); } }} className="px-2 py-1 bg-gray-800 rounded text-[10px] hover:bg-gray-700">Show</button>
+            </Panel>
+            <Panel title="File Transfer">
+              <div className="space-y-2">
+                <div className="flex gap-1.5">
+                  <input type="text" placeholder="local path" id="push-local" className="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-[10px] font-mono focus:outline-none focus:border-emerald-400" />
+                  <input type="text" placeholder="device path" id="push-remote" className="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-[10px] font-mono focus:outline-none focus:border-emerald-400" />
+                  <button onClick={() => { const l=(document.getElementById('push-local') as HTMLInputElement)?.value; const r=(document.getElementById('push-remote') as HTMLInputElement)?.value; if(id&&l&&r) api.execADB(id,`push ${l} ${r}`); }} className="px-2 py-1 bg-gray-700 rounded text-[10px]">Push</button>
+                </div>
+                <div className="flex gap-1.5">
+                  <input type="text" placeholder="device path" id="pull-remote" className="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-[10px] font-mono focus:outline-none focus:border-emerald-400" />
+                  <input type="text" placeholder="local path" id="pull-local" className="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-[10px] font-mono focus:outline-none focus:border-emerald-400" />
+                  <button onClick={() => { const r=(document.getElementById('pull-remote') as HTMLInputElement)?.value; const l=(document.getElementById('pull-local') as HTMLInputElement)?.value; if(id&&r&&l) api.execADB(id,`pull ${r} ${l}`); }} className="px-2 py-1 bg-gray-700 rounded text-[10px]">Pull</button>
+                </div>
+              </div>
+            </Panel>
+            <Panel title="UI Hierarchy">
+              <button onClick={async () => { if(id) { const r = await api.execADB(id, 'uiautomator dump /dev/tty'); setAdbOutput(r.output||''); } }} className="px-2 py-1 bg-gray-800 rounded text-[10px] hover:bg-gray-700">Dump</button>
+            </Panel>
+          </>}
         </div>
-
-        {/* Deeplink */}
-        <Panel title="Deep Link">
-          <div className="flex gap-2">
-            <input type="text" placeholder="https://..." className="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-[10px] focus:outline-none focus:border-emerald-400"
-              onKeyDown={e => { if (e.key === 'Enter' && id) api.openDeeplink(id, (e.target as HTMLInputElement).value); }} />
-          </div>
-        </Panel>
-
-        {/* Phone + SMS */}
-        <div className="grid grid-cols-2 gap-3">
-          <Panel title="Phone Call">
-            <div className="flex gap-1.5">
-              <input type="text" placeholder="+1234567890" id="phone-num" className="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-[10px] font-mono focus:outline-none focus:border-emerald-400" />
-              <button onClick={() => {
-                const num = (document.getElementById('phone-num') as HTMLInputElement)?.value;
-                if (id && num) api.execADB(id, `emu gsm call ${num}`);
-              }} className="px-2 py-1 bg-emerald-500/20 text-emerald-400 rounded text-[10px]">Call</button>
-            </div>
-          </Panel>
-          <Panel title="SMS">
-            <div className="flex gap-1.5">
-              <input type="text" placeholder="Message..." id="sms-text" className="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-[10px] focus:outline-none focus:border-emerald-400" />
-              <button onClick={() => {
-                const txt = (document.getElementById('sms-text') as HTMLInputElement)?.value;
-                if (id && txt) api.execADB(id, `emu sms send 1234567890 ${txt}`);
-              }} className="px-2 py-1 bg-blue-500/20 text-blue-400 rounded text-[10px]">Send</button>
-            </div>
-          </Panel>
-        </div>
-
-        {/* D-pad */}
-        <Panel title="D-Pad">
-          <div className="flex justify-center">
-            <div className="grid grid-cols-3 gap-1 w-fit">
-              <div />
-              <button onClick={() => sendInput('key 19')} className="px-3 py-1.5 bg-gray-800 rounded text-[10px] hover:bg-gray-700">▲</button>
-              <div />
-              <button onClick={() => sendInput('key 21')} className="px-3 py-1.5 bg-gray-800 rounded text-[10px] hover:bg-gray-700">◀</button>
-              <button onClick={() => sendInput('key 23')} className="px-3 py-1.5 bg-gray-800 rounded text-[10px] hover:bg-gray-700">●</button>
-              <button onClick={() => sendInput('key 22')} className="px-3 py-1.5 bg-gray-800 rounded text-[10px] hover:bg-gray-700">▶</button>
-              <div />
-              <button onClick={() => sendInput('key 20')} className="px-3 py-1.5 bg-gray-800 rounded text-[10px] hover:bg-gray-700">▼</button>
-              <div />
-            </div>
-          </div>
-        </Panel>
-
-        {/* Recording + HAR + Screenshot */}
-        <div className="grid grid-cols-3 gap-3">
-          <Panel title="Video">
-            {!recording ? (
-              <button onClick={async () => { if (id) { await api.startRecording(id); setRecording(true); } }}
-                className="w-full px-2 py-1.5 bg-red-500/20 text-red-400 rounded text-[10px] hover:bg-red-500/30 transition">
-                ● Record
-              </button>
-            ) : (
-              <button onClick={async () => { if (id) { await api.stopRecording(id); setRecording(false); } }}
-                className="w-full px-2 py-1.5 bg-red-500 text-white rounded text-[10px] animate-pulse">
-                ■ Stop
-              </button>
-            )}
-          </Panel>
-          <Panel title="Network">
-            {!harCapturing ? (
-              <button onClick={async () => { if (id) { await api.startHAR(id); setHarCapturing(true); } }}
-                className="w-full px-2 py-1.5 bg-blue-500/20 text-blue-400 rounded text-[10px] hover:bg-blue-500/30 transition">
-                Capture
-              </button>
-            ) : (
-              <button onClick={async () => { if (id) { await api.stopHAR(id); setHarCapturing(false); } }}
-                className="w-full px-2 py-1.5 bg-blue-500 text-white rounded text-[10px] animate-pulse">
-                ■ Stop
-              </button>
-            )}
-          </Panel>
-          <Panel title="Screenshot">
-            <button onClick={async () => {
-              if (!id) return;
-              const blob = await api.takeScreenshot(id);
-              const url = URL.createObjectURL(blob);
-              const a = document.createElement('a'); a.href = url; a.download = `screenshot_${Date.now()}.png`; a.click();
-              URL.revokeObjectURL(url);
-            }} className="w-full px-2 py-1.5 bg-gray-700 text-gray-300 rounded text-[10px] hover:bg-gray-600 transition">
-              Capture
-            </button>
-          </Panel>
-        </div>
-
-        {/* ADB Shell */}
-        <Panel title="ADB Shell">
-          <div className="flex gap-2">
-            <input type="text" placeholder="shell command..." value={adbCmd} onChange={e => setAdbCmd(e.target.value)}
-              className="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-[10px] font-mono focus:outline-none focus:border-emerald-400"
-              onKeyDown={async e => {
-                if (e.key === 'Enter' && id && adbCmd) {
-                  const r = await api.execADB(id, adbCmd);
-                  setAdbOutput(r.output || r.error || '');
-                  setAdbCmd('');
-                }
-              }} />
-          </div>
-          {adbOutput && <pre className="mt-1 text-[9px] text-gray-500 font-mono bg-gray-950 p-2 rounded max-h-24 overflow-auto">{adbOutput}</pre>}
-        </Panel>
-
-        {/* Logcat */}
-        <LogcatPanel instanceId={id || ''} />
       </div>
     </div>
   );
@@ -432,51 +419,24 @@ function LogcatPanel({ instanceId }: { instanceId: string }) {
   const logRef = useRef<HTMLPreElement>(null);
   const [lines, setLines] = useState<string[]>([]);
   const [paused, setPaused] = useState(false);
-
   useEffect(() => {
     if (!instanceId) return;
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws = new WebSocket(`${proto}//${window.location.host}/api/v1/sessions/${instanceId}/logcat`);
-
-    ws.onmessage = (e) => {
-      if (paused) return;
-      const newLines = e.data.split('\n').filter((l: string) => l.trim());
-      setLines(prev => [...prev.slice(-200), ...newLines]);
-      if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
-    };
-
+    ws.onmessage = (e) => { if (paused) return; const nl = e.data.split('\n').filter((l: string) => l.trim()); setLines(prev => [...prev.slice(-200), ...nl]); if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight; };
     return () => ws.close();
   }, [instanceId, paused]);
-
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-lg">
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-gray-800">
         <span className="text-[10px] text-gray-500 uppercase tracking-wider">Logcat</span>
         <div className="flex gap-2">
-          <button onClick={() => setPaused(!paused)}
-            className={`text-[10px] px-2 py-0.5 rounded ${paused ? 'bg-yellow-500/20 text-yellow-400' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}>
-            {paused ? 'Resume' : 'Pause'}
-          </button>
+          <button onClick={() => setPaused(!paused)} className={`text-[10px] px-2 py-0.5 rounded ${paused ? 'bg-yellow-500/20 text-yellow-400' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}>{paused ? 'Resume' : 'Pause'}</button>
           <button onClick={() => setLines([])} className="text-[10px] px-2 py-0.5 bg-gray-800 text-gray-400 rounded hover:bg-gray-700">Clear</button>
         </div>
       </div>
-      <pre ref={logRef} className="p-2 text-[8px] font-mono text-gray-500 h-[150px] overflow-auto leading-tight whitespace-pre-wrap">
-        {lines.length === 0 ? 'Waiting for logs...' : lines.join('\n')}
-      </pre>
+      <pre ref={logRef} className="p-2 text-[8px] font-mono text-gray-500 h-[150px] overflow-auto leading-tight whitespace-pre-wrap">{lines.length === 0 ? 'Waiting for logs...' : lines.join('\n')}</pre>
     </div>
-  );
-}
-
-function Chip({ active, mono, onClick, children }: { active?: boolean; mono?: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button onClick={onClick}
-      className={`px-2 py-1 rounded text-[10px] transition ${mono ? 'font-mono' : ''} ${
-        active
-          ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/50'
-          : 'bg-gray-800 text-gray-300 border border-transparent hover:bg-gray-700'
-      }`}>
-      {children}
-    </button>
   );
 }
 
@@ -487,4 +447,8 @@ function Panel({ title, children }: { title: string; children: React.ReactNode }
       {children}
     </div>
   );
+}
+
+function NavBtn({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
+  return <button onClick={onClick} className="px-2 py-1 bg-gray-800 rounded text-[10px] hover:bg-gray-700">{children}</button>;
 }
