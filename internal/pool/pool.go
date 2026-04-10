@@ -144,7 +144,8 @@ func (p *Pool) adoptRunningEmulators(ctx context.Context) {
 		inst.RecordHealthCheck(true)
 		inst.TouchActivity()
 
-		go p.watchDevice(inst)
+		// watchDevice disabled — was killing emulators during ADB-heavy operations
+	// go p.watchDevice(inst)
 
 		log.Info().Str("serial", dev.Serial).Str("name", emuDev.DisplayName()).Msg("pool: adopted running emulator")
 	}
@@ -429,7 +430,8 @@ func (p *Pool) bootEmulator(ctx context.Context, avdName string, profileName str
 		Msg("pool: device warm and ready")
 
 	p.notifyReady()
-	go p.watchDevice(inst)
+	// watchDevice disabled — was killing emulators during ADB-heavy operations
+	// go p.watchDevice(inst)
 
 	return inst, nil
 }

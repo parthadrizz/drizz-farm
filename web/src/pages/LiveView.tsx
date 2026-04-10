@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api, DeviceInstance } from '../lib/api';
-import JMuxer from 'jmuxer';
+// PNG streaming — simple and reliable
 
 type Tab = 'device' | 'input' | 'apps' | 'capture' | 'debug';
 
@@ -33,71 +33,116 @@ export function LiveView() {
 
   useEffect(() => { api.pool().then(p => { const inst = p.instances.find((i: DeviceInstance) => i.id === id || i.session_id === id); if (inst) setInstance(inst); }); }, [id]);
 
-  // Screen WebSocket — supports H.264 (via jmuxer) and PNG fallback
+  // Screen — WebRTC H.264 (primary) with PNG WebSocket fallback
   const videoRef = useRef<HTMLVideoElement>(null);
-  const jmuxerRef = useRef<JMuxer | null>(null);
-  const [codec, setCodec] = useState<'h264' | 'png' | null>(null);
+  const pcRef = useRef<RTCPeerConnection | null>(null);
+  const [useWebRTC, setUseWebRTC] = useState(true);
 
+  // Try WebRTC first
   useEffect(() => {
-    if (!id) return;
+    if (!id || !useWebRTC) return;
+
+    const startWebRTC = async () => {
+      try {
+        const pc = new RTCPeerConnection({
+          iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+        });
+        pcRef.current = pc;
+
+        // Receive video track
+        pc.ontrack = (event) => {
+          if (videoRef.current && event.streams[0]) {
+            videoRef.current.srcObject = event.streams[0];
+            videoRef.current.play();
+            setConnected(true);
+            console.log('WebRTC: video track received');
+          }
+        };
+
+        pc.onconnectionstatechange = () => {
+          console.log('WebRTC state:', pc.connectionState);
+          if (pc.connectionState === 'connected') setConnected(true);
+          if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+            setConnected(false);
+            setUseWebRTC(false); // Fall back to PNG
+          }
+        };
+
+        // Add transceiver for receiving video
+        pc.addTransceiver('video', { direction: 'recvonly' });
+
+        // Create offer
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+
+        // Send offer to server, get answer
+        const resp = await fetch(`/api/v1/sessions/${id}/webrtc/offer`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sdp: offer.sdp, type: 'offer' }),
+        });
+
+        if (!resp.ok) {
+          console.warn('WebRTC offer failed, falling back to PNG');
+          setUseWebRTC(false);
+          return;
+        }
+
+        const answer = await resp.json();
+        await pc.setRemoteDescription(new RTCSessionDescription({
+          type: 'answer',
+          sdp: answer.sdp,
+        }));
+
+        console.log('WebRTC: connection established');
+
+        // FPS counter via video frame callback
+        if ('requestVideoFrameCallback' in HTMLVideoElement.prototype) {
+          const countFrame = () => {
+            frameCount.current++;
+            (videoRef.current as any)?.requestVideoFrameCallback(countFrame);
+          };
+          (videoRef.current as any)?.requestVideoFrameCallback(countFrame);
+        }
+      } catch (e) {
+        console.error('WebRTC failed:', e);
+        setUseWebRTC(false);
+      }
+    };
+
+    startWebRTC();
+    return () => { pcRef.current?.close(); pcRef.current = null; };
+  }, [id, useWebRTC]);
+
+  // PNG WebSocket fallback
+  useEffect(() => {
+    if (!id || useWebRTC) return;
+    console.log('Using PNG fallback');
+
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws = new WebSocket(`${proto}//${window.location.host}/api/v1/sessions/${id}/screen`);
     ws.binaryType = 'arraybuffer';
     wsRef.current = ws;
     ws.onopen = () => setConnected(true);
     ws.onclose = () => setConnected(false);
-
-    let detectedCodec = '';
-
     ws.onmessage = (event) => {
-      if (typeof event.data === 'string') {
-        try {
-          const info = JSON.parse(event.data);
-          detectedCodec = info.codec;
-          setCodec(info.codec as any);
-        } catch {}
-        return;
-      }
-
+      if (typeof event.data === 'string') return;
       frameCount.current++;
-
-      if (detectedCodec === 'h264') {
-        // Feed to jmuxer if ready
-        if (jmuxerRef.current) {
-          jmuxerRef.current.feed({ video: new Uint8Array(event.data) });
-        }
-      } else {
-        // PNG fallback
-        const blob = new Blob([event.data], { type: 'image/png' });
-        const url = URL.createObjectURL(blob);
-        const img = new Image();
-        img.onload = () => { const c = canvasRef.current; if (!c) return; c.width = img.width; c.height = img.height; c.getContext('2d')?.drawImage(img, 0, 0); URL.revokeObjectURL(url); };
-        img.src = url;
-      }
+      const blob = new Blob([event.data], { type: 'image/png' });
+      const url = URL.createObjectURL(blob);
+      const img = new Image();
+      img.onload = () => {
+        const c = canvasRef.current;
+        if (!c) return;
+        if (c.width !== img.width) c.width = img.width;
+        if (c.height !== img.height) c.height = img.height;
+        c.getContext('2d')?.drawImage(img, 0, 0);
+        URL.revokeObjectURL(url);
+      };
+      img.src = url;
     };
-
-    return () => { ws.close(); };
-  }, [id]);
-
-  // Init jmuxer after codec is detected and video element is rendered
-  useEffect(() => {
-    if (codec !== 'h264') return;
-    // Small delay to let React render the <video> element
-    const timer = setTimeout(() => {
-      if (videoRef.current && !jmuxerRef.current) {
-        jmuxerRef.current = new JMuxer({
-          node: videoRef.current,
-          mode: 'video',
-          fps: 30,
-          flushingTime: 0,
-          debug: false,
-        });
-        videoRef.current.play();
-        console.log('jmuxer initialized');
-      }
-    }, 100);
-    return () => { clearTimeout(timer); jmuxerRef.current?.destroy(); jmuxerRef.current = null; };
-  }, [codec]);
+    return () => ws.close();
+  }, [id, useWebRTC]);
 
   // Input WebSocket
   useEffect(() => {
@@ -116,15 +161,12 @@ export function LiveView() {
 
   // Gestures
   const dragStart = useRef<{ x: number; y: number; time: number } | null>(null);
-  const canvasCoords = useCallback((e: React.MouseEvent<HTMLCanvasElement | HTMLVideoElement>) => {
-    const el = (codec === 'h264' ? videoRef.current : canvasRef.current) as HTMLElement;
-    if (!el) return { x: 0, y: 0 };
-    const r = el.getBoundingClientRect();
-    // Map display coords to device coords (720x1600 for scrcpy, 1080x2400 for screencap)
-    const deviceW = codec === 'h264' ? 720 : 1080;
-    const deviceH = codec === 'h264' ? 1600 : 2400;
-    return { x: Math.round((e.clientX - r.left) / r.width * deviceW), y: Math.round((e.clientY - r.top) / r.height * deviceH) };
-  }, [codec]);
+  const canvasCoords = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    const c = canvasRef.current;
+    if (!c) return { x: 0, y: 0 };
+    const r = c.getBoundingClientRect();
+    return { x: Math.round((e.clientX - r.left) * c.width / r.width), y: Math.round((e.clientY - r.top) * c.height / r.height) };
+  }, []);
   const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => { dragStart.current = { ...canvasCoords(e), time: Date.now() }; }, [canvasCoords]);
   const handleMouseUp = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!dragStart.current) return;
@@ -178,10 +220,10 @@ export function LiveView() {
         <div className="bg-gray-900 border border-gray-800 rounded-lg p-1 inline-block">
           {!connected ? (
             <div className="w-[240px] h-[533px] flex items-center justify-center"><div className="animate-spin w-5 h-5 border-2 border-gray-600 border-t-emerald-400 rounded-full" /></div>
-          ) : codec === 'h264' ? (
+          ) : useWebRTC ? (
             <video ref={videoRef} autoPlay muted playsInline
               onMouseDown={handleMouseDown as any} onMouseUp={handleMouseUp as any} onMouseLeave={handleMouseLeave as any}
-              className="w-[240px] h-[533px] cursor-crosshair rounded select-none object-cover" />
+              className="w-[240px] h-[533px] cursor-crosshair rounded select-none bg-black object-cover" />
           ) : (
             <canvas ref={canvasRef} onMouseDown={handleMouseDown} onMouseUp={handleMouseUp} onMouseLeave={handleMouseLeave}
               className="w-[240px] h-[533px] cursor-crosshair rounded select-none" style={{ imageRendering: 'auto' }} />

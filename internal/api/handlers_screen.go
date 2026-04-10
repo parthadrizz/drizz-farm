@@ -67,19 +67,15 @@ func (h *screenHandlers) StreamScreen(w http.ResponseWriter, r *http.Request) {
 		for { _, _, err := conn.ReadMessage(); if err != nil { cancel(); return } }
 	}()
 
-	// Try H.264 via screenrecord first (30fps, low latency)
-	if h.tryScreenrecord(ctx, conn, serial) {
-		return
-	}
+	log.Info().Str("serial", serial).Msg("screen: streaming started (PNG)")
 
-	// Fallback: screencap PNG polling (2fps)
-	log.Info().Str("serial", serial).Msg("screen: using screencap fallback")
-	conn.WriteMessage(websocket.TextMessage, []byte(`{"codec":"png"}`))
-	ticker := time.NewTicker(500 * time.Millisecond)
+	ticker := time.NewTicker(400 * time.Millisecond)
 	defer ticker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
+			log.Info().Str("serial", serial).Msg("screen: streaming stopped")
 			return
 		case <-ticker.C:
 			png, err := h.adb.Screencap(ctx, serial)
