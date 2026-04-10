@@ -30,6 +30,7 @@ type Broker struct {
 	mu       sync.RWMutex
 	sessions map[string]*Session
 
+	nodeName   string
 	pool       *pool.Pool
 	queue      *Queue
 	cfg        *config.Config
@@ -56,6 +57,7 @@ func NewBroker(cfg *config.Config, p *pool.Pool, s *store.Store, fed *federation
 
 	b := &Broker{
 		sessions:   make(map[string]*Session),
+		nodeName:   cfg.Node.Name,
 		pool:       p,
 		store:      s,
 		webhook:    webhook.NewSender(webhookURLs),
@@ -214,14 +216,14 @@ func (b *Broker) Release(ctx context.Context, id string) error {
 		// No local pool release needed
 		b.appium.Stop(id)
 		b.webhook.Send(webhook.Event{
-			Type: "session.released", SessionID: id, Duration: now.Sub(sess.CreatedAt).String(),
+			Type: "session.released", SessionID: id, Duration: now.Sub(sess.CreatedAt).String(), NodeName: b.nodeName,
 		})
 		return nil
 	}
 
 	// Persist to SQLite
 	if b.store != nil {
-		b.store.RecordSession(sess.ID, sess.Profile, sess.Platform, sess.InstanceID, "", sess.Connection.ADBSerial, sess.Connection.Host, sess.Source, "released", sess.Connection.ADBPort, sess.CreatedAt, sess.ReleasedAt)
+		b.store.RecordSession(sess.ID, sess.Profile, sess.Platform, sess.InstanceID, "", sess.Connection.ADBSerial, sess.Connection.Host, sess.Source, "released", b.nodeName, sess.Connection.ADBPort, sess.CreatedAt, sess.ReleasedAt)
 		b.store.RecordEvent("session_released", sess.InstanceID, sess.ID, fmt.Sprintf("duration=%s", now.Sub(sess.CreatedAt)))
 	}
 
@@ -231,7 +233,7 @@ func (b *Broker) Release(ctx context.Context, id string) error {
 	// Webhook
 	b.webhook.Send(webhook.Event{
 		Type: "session.released", SessionID: id, InstanceID: sess.InstanceID,
-		Profile: sess.Profile, Duration: now.Sub(sess.CreatedAt).String(),
+		Profile: sess.Profile, Duration: now.Sub(sess.CreatedAt).String(), NodeName: b.nodeName,
 	})
 
 	// Release emulator back to pool (triggers snapshot restore)
@@ -312,13 +314,17 @@ func (b *Broker) createSessionFromInstance(inst *pool.DeviceInstance, req Create
 		timeout = maxDuration
 	}
 
+	conn := b.buildConnectionInfo(inst)
+	conn.NodeName = b.nodeName
+
 	sess := &Session{
 		ID:         sessionID,
+		NodeName:   b.nodeName,
 		Profile:    req.Profile,
 		Platform:   req.Platform,
 		InstanceID: inst.ID,
 		State:      SessionActive,
-		Connection: b.buildConnectionInfo(inst),
+		Connection: conn,
 		ClientID:   req.ClientID,
 		ClientName: req.ClientName,
 		Source:     req.Source,
@@ -350,7 +356,7 @@ func (b *Broker) createSessionFromInstance(inst *pool.DeviceInstance, req Create
 			deviceName = inst.Device.DisplayName()
 		}
 		conn := b.buildConnectionInfo(inst)
-		b.store.RecordSession(sess.ID, sess.Profile, sess.Platform, inst.ID, deviceName, conn.ADBSerial, conn.Host, sess.Source, "active", conn.ADBPort, sess.CreatedAt, nil)
+		b.store.RecordSession(sess.ID, sess.Profile, sess.Platform, inst.ID, deviceName, conn.ADBSerial, conn.Host, sess.Source, "active", b.nodeName, conn.ADBPort, sess.CreatedAt, nil)
 		b.store.RecordEvent("session_created", inst.ID, sess.ID, "profile="+sess.Profile)
 	}
 
@@ -371,7 +377,7 @@ func (b *Broker) createSessionFromInstance(inst *pool.DeviceInstance, req Create
 	// Webhook
 	b.webhook.Send(webhook.Event{
 		Type: "session.created", SessionID: sess.ID, InstanceID: inst.ID,
-		Profile: sess.Profile, Serial: sess.Connection.ADBSerial,
+		Profile: sess.Profile, Serial: sess.Connection.ADBSerial, NodeName: b.nodeName,
 	})
 
 	return sess
@@ -414,7 +420,7 @@ func (b *Broker) enforceTimeouts(ctx context.Context) {
 
 		if sess, err := b.Get(id); err == nil {
 			if b.store != nil {
-				b.store.RecordSession(sess.ID, sess.Profile, sess.Platform, sess.InstanceID, "", sess.Connection.ADBSerial, sess.Connection.Host, sess.Source, "timed_out", sess.Connection.ADBPort, sess.CreatedAt, sess.ReleasedAt)
+				b.store.RecordSession(sess.ID, sess.Profile, sess.Platform, sess.InstanceID, "", sess.Connection.ADBSerial, sess.Connection.Host, sess.Source, "timed_out", b.nodeName, sess.Connection.ADBPort, sess.CreatedAt, sess.ReleasedAt)
 				b.store.RecordEvent("session_timed_out", sess.InstanceID, sess.ID, "")
 			}
 			_ = b.pool.Release(ctx, sess.InstanceID)

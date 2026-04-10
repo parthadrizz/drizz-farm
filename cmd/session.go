@@ -96,6 +96,7 @@ func runSessionCreate(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("Session created!\n\n")
 	fmt.Printf("  ID:       %s\n", sess.ID)
+	fmt.Printf("  Node:     %s\n", sess.NodeName)
 	fmt.Printf("  Profile:  %s\n", sess.Profile)
 	fmt.Printf("  Serial:   %s\n", sess.Connection.ADBSerial)
 	fmt.Printf("  ADB:      %s:%d\n", sess.Connection.Host, sess.Connection.ADBPort)
@@ -140,10 +141,11 @@ func runSessionList(cmd *cobra.Command, args []string) error {
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "ID\tPROFILE\tSTATE\tSERIAL\tADB\tCREATED\tEXPIRES")
+	fmt.Fprintln(w, "ID\tNODE\tPROFILE\tSTATE\tSERIAL\tADB\tCREATED\tEXPIRES")
 	for _, sess := range result.Sessions {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s:%d\t%s\t%s\n",
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s:%d\t%s\t%s\n",
 			sess.ID,
+			sess.NodeName,
 			sess.Profile,
 			sess.State,
 			sess.Connection.ADBSerial,

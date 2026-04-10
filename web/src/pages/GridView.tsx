@@ -90,6 +90,7 @@ function StreamTile({ instance, onClick }: { instance: DeviceInstance; onClick: 
       </div>
       <div className="mt-2 text-center">
         <span className="text-[11px] text-purple-400 font-mono">{instance.device_name}</span>
+        {instance.node_name && <div className="text-[9px] text-gray-600 font-mono">{instance.node_name}</div>}
       </div>
     </div>
   );

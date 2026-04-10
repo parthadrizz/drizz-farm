@@ -153,6 +153,9 @@ export function Sessions() {
                     )}
                   </div>
                   <div className="text-xs text-gray-500 mt-0.5 flex items-center gap-3">
+                    {(s.node_name || s.connection?.node_name) && (
+                      <span className="text-cyan-400 bg-cyan-400/10 px-1 py-0.5 rounded text-[10px]">{s.node_name || s.connection?.node_name}</span>
+                    )}
                     <span>{s.profile || 'auto'} · {s.platform}</span>
                     <span>{formatTime(s.created_at)}</span>
                     {(s.duration_seconds > 0) && (

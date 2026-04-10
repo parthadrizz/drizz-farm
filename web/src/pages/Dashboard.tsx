@@ -248,7 +248,7 @@ function NodeDeviceList({
             <div className="flex-1 min-w-0">
               <div className="text-xs font-medium text-gray-200 truncate">{name}</div>
               <div className="text-[10px] text-gray-600">
-                {inst ? `${inst.serial} · port:${inst.connection?.adb_port || '-'}` : 'offline'}
+                {inst ? `${inst.node_name ? inst.node_name + ':' : ''}${inst.serial} · port:${inst.connection?.adb_port || '-'}` : 'offline'}
               </div>
             </div>
             <span className={`text-[9px] px-1.5 py-0.5 rounded font-medium uppercase ${badgeStyle[state] || badgeStyle.offline}`}>{state}</span>

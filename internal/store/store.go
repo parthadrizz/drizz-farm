@@ -87,13 +87,20 @@ func (s *Store) migrate() error {
 		CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type);
 		CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Migration: add node_name column if missing
+	s.db.Exec(`ALTER TABLE sessions ADD COLUMN node_name TEXT NOT NULL DEFAULT ''`)
+
+	return nil
 }
 
 // --- Session History ---
 
 // RecordSession saves a completed session to history.
-func (s *Store) RecordSession(id, profile, platform, instanceID, deviceName, serial, host, source, state string, adbPort int, createdAt time.Time, releasedAt *time.Time) error {
+func (s *Store) RecordSession(id, profile, platform, instanceID, deviceName, serial, host, source, state, nodeName string, adbPort int, createdAt time.Time, releasedAt *time.Time) error {
 	duration := 0
 	var released *string
 	if releasedAt != nil {
@@ -103,9 +110,9 @@ func (s *Store) RecordSession(id, profile, platform, instanceID, deviceName, ser
 	}
 
 	_, err := s.db.Exec(`
-		INSERT OR REPLACE INTO sessions (id, profile, platform, instance_id, device_name, serial, host, adb_port, source, state, created_at, released_at, duration_seconds)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, profile, platform, instanceID, deviceName, serial, host, adbPort, source, state,
+		INSERT OR REPLACE INTO sessions (id, profile, platform, instance_id, device_name, serial, host, adb_port, source, state, node_name, created_at, released_at, duration_seconds)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, profile, platform, instanceID, deviceName, serial, host, adbPort, source, state, nodeName,
 		createdAt.Format(time.RFC3339), released, duration)
 	return err
 }
@@ -113,6 +120,7 @@ func (s *Store) RecordSession(id, profile, platform, instanceID, deviceName, ser
 // SessionHistory returns recent sessions.
 type SessionRecord struct {
 	ID              string  `json:"id"`
+	NodeName        string  `json:"node_name"`
 	Profile         string  `json:"profile"`
 	Platform        string  `json:"platform"`
 	DeviceName      string  `json:"device_name"`
@@ -126,7 +134,7 @@ type SessionRecord struct {
 
 func (s *Store) SessionHistory(limit int) ([]SessionRecord, error) {
 	rows, err := s.db.Query(`
-		SELECT id, profile, platform, device_name, serial, source, state, created_at, released_at, duration_seconds
+		SELECT id, node_name, profile, platform, device_name, serial, source, state, created_at, released_at, duration_seconds
 		FROM sessions ORDER BY created_at DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
@@ -136,7 +144,7 @@ func (s *Store) SessionHistory(limit int) ([]SessionRecord, error) {
 	var records []SessionRecord
 	for rows.Next() {
 		var r SessionRecord
-		if err := rows.Scan(&r.ID, &r.Profile, &r.Platform, &r.DeviceName, &r.Serial, &r.Source, &r.State, &r.CreatedAt, &r.ReleasedAt, &r.DurationSeconds); err != nil {
+		if err := rows.Scan(&r.ID, &r.NodeName, &r.Profile, &r.Platform, &r.DeviceName, &r.Serial, &r.Source, &r.State, &r.CreatedAt, &r.ReleasedAt, &r.DurationSeconds); err != nil {
 			continue
 		}
 		records = append(records, r)

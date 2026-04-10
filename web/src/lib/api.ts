@@ -1,6 +1,7 @@
 const BASE = '/api/v1';
 
 export interface PoolStatus {
+  node_name: string;
   total_capacity: number;
   warm: number;
   allocated: number;
@@ -12,6 +13,7 @@ export interface PoolStatus {
 
 export interface DeviceInstance {
   id: string;
+  node_name: string;
   device_kind: string;
   device_name: string;
   profile: string;
@@ -26,6 +28,7 @@ export interface DeviceInstance {
 
 export interface ConnectionInfo {
   host: string;
+  node_name?: string;
   device_kind?: string;
   adb_port?: number;
   adb_serial?: string;
@@ -34,6 +37,7 @@ export interface ConnectionInfo {
 
 export interface Session {
   id: string;
+  node_name: string;
   profile: string;
   platform: string;
   instance_id: string;

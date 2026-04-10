@@ -10,6 +10,7 @@ type DeviceInstance struct {
 	mu sync.RWMutex
 
 	ID           string      `json:"id"`
+	NodeName     string      `json:"node_name"`
 	ProfileName  string      `json:"profile"`
 	State        DeviceState `json:"state"`
 	SessionID    string      `json:"session_id,omitempty"`
@@ -102,6 +103,7 @@ func (d *DeviceInstance) Snapshot() InstanceSnapshot {
 
 	snap := InstanceSnapshot{
 		ID:           d.ID,
+		NodeName:     d.NodeName,
 		ProfileName:  d.ProfileName,
 		State:        d.State,
 		SessionID:    d.SessionID,
@@ -125,6 +127,7 @@ func (d *DeviceInstance) Snapshot() InstanceSnapshot {
 // InstanceSnapshot is a read-only copy safe for JSON serialization.
 type InstanceSnapshot struct {
 	ID           string         `json:"id"`
+	NodeName     string         `json:"node_name"`
 	DeviceKind   DeviceKind     `json:"device_kind"`
 	DeviceName   string         `json:"device_name"`
 	ProfileName  string         `json:"profile"`

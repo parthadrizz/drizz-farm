@@ -37,7 +37,7 @@ func TestRecordSession(t *testing.T) {
 	now := time.Now()
 	released := now.Add(5 * time.Minute)
 
-	err := s.RecordSession("sess-1", "pixel7", "android", "inst-1", "Pixel 7", "emulator-5554", "192.168.1.1", "cli", "released", 5555, now, &released)
+	err := s.RecordSession("sess-1", "pixel7", "android", "inst-1", "Pixel 7", "emulator-5554", "192.168.1.1", "cli", "released", "test-node", 5555, now, &released)
 	if err != nil {
 		t.Fatalf("RecordSession error: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestSessionHistoryLimit(t *testing.T) {
 
 	for i := 0; i < 10; i++ {
 		now := time.Now()
-		s.RecordSession("sess-"+string(rune('a'+i)), "pixel7", "android", "inst-1", "Pixel 7", "emulator-5554", "192.168.1.1", "cli", "released", 5555, now, nil)
+		s.RecordSession("sess-"+string(rune('a'+i)), "pixel7", "android", "inst-1", "Pixel 7", "emulator-5554", "192.168.1.1", "cli", "released", "test-node", 5555, now, nil)
 	}
 
 	records, _ := s.SessionHistory(3)
@@ -112,11 +112,11 @@ func TestSessionUpsert(t *testing.T) {
 
 	now := time.Now()
 	// Insert
-	s.RecordSession("sess-1", "pixel7", "android", "inst-1", "Pixel 7", "emulator-5554", "192.168.1.1", "cli", "active", 5555, now, nil)
+	s.RecordSession("sess-1", "pixel7", "android", "inst-1", "Pixel 7", "emulator-5554", "192.168.1.1", "cli", "active", "test-node", 5555, now, nil)
 
 	// Update (upsert)
 	released := now.Add(10 * time.Minute)
-	s.RecordSession("sess-1", "pixel7", "android", "inst-1", "Pixel 7", "emulator-5554", "192.168.1.1", "cli", "released", 5555, now, &released)
+	s.RecordSession("sess-1", "pixel7", "android", "inst-1", "Pixel 7", "emulator-5554", "192.168.1.1", "cli", "released", "test-node", 5555, now, &released)
 
 	records, _ := s.SessionHistory(10)
 	if len(records) != 1 {

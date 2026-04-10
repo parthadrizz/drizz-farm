@@ -154,7 +154,11 @@ func runStatus(cmd *cobra.Command, args []string) error {
 				line := fmt.Sprintf("    %s %-35s %s", icon, avd.Name, displayState)
 
 				if displayState == "ONLINE" {
-					line += fmt.Sprintf("  %s  port:%d", inst.Serial, inst.Connection.ADBPort)
+					nodePrefix := ""
+					if inst.NodeName != "" {
+						nodePrefix = inst.NodeName + ":"
+					}
+					line += fmt.Sprintf("  %s%s  port:%d", nodePrefix, inst.Serial, inst.Connection.ADBPort)
 					if inst.SessionID != "" {
 						line += fmt.Sprintf("  session:%s", inst.SessionID)
 					}

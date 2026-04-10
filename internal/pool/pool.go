@@ -22,6 +22,7 @@ var (
 
 // PoolStatus is a snapshot of pool state for API responses.
 type PoolStatus struct {
+	NodeName      string             `json:"node_name"`
 	TotalCapacity int                `json:"total_capacity"`
 	Warm          int                `json:"warm"`
 	Allocated     int                `json:"allocated"`
@@ -39,6 +40,7 @@ type Pool struct {
 	mu  sync.RWMutex
 	sem chan struct{} // semaphore: limits concurrent devices to MaxConcurrent
 
+	nodeName  string
 	cfg       *config.Config
 	instances map[string]*DeviceInstance
 	bootingAVDs map[string]bool // AVD names currently being booted
@@ -63,6 +65,7 @@ type Pool struct {
 func New(cfg *config.Config, sdk *android.SDK, runner android.CommandRunner) *Pool {
 	adb := android.NewADBClient(sdk, runner)
 	return &Pool{
+		nodeName:    cfg.Node.Name,
 		cfg:         cfg,
 		sem:         make(chan struct{}, cfg.Pool.MaxConcurrent),
 		instances:   make(map[string]*DeviceInstance),
@@ -317,6 +320,7 @@ func (p *Pool) Status() PoolStatus {
 	defer p.mu.RUnlock()
 
 	status := PoolStatus{
+		NodeName:      p.nodeName,
 		TotalCapacity: p.cfg.Pool.MaxConcurrent,
 		Instances:     make([]InstanceSnapshot, 0, len(p.instances)),
 	}
@@ -512,6 +516,7 @@ func (p *Pool) createInstance(dev Device, profileName string) *DeviceInstance {
 	id := uuid.New().String()[:8]
 	inst := &DeviceInstance{
 		ID:          id,
+		NodeName:    p.nodeName,
 		ProfileName: profileName,
 		State:       StateCreating,
 		CreatedAt:   time.Now(),

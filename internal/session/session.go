@@ -54,6 +54,7 @@ func (s *SessionState) UnmarshalJSON(data []byte) error {
 // Session represents a user's active session with an emulator.
 type Session struct {
 	ID          string       `json:"id"`
+	NodeName    string       `json:"node_name"`
 	Profile     string       `json:"profile"`
 	Platform    string       `json:"platform"` // "android" or "ios"
 	InstanceID  string       `json:"instance_id"`
@@ -71,6 +72,7 @@ type Session struct {
 // ConnectionInfo holds the connection details for a session.
 type ConnectionInfo struct {
 	Host         string `json:"host"`
+	NodeName     string `json:"node_name,omitempty"`
 	DeviceKind   string `json:"device_kind,omitempty"`
 	ADBPort      int    `json:"adb_port,omitempty"`
 	ADBSerial    string `json:"adb_serial,omitempty"`

@@ -160,7 +160,19 @@
       "Bash(curl -s http://localhost:9401/api/v1/sessions)",
       "Bash(python3 -c \" import sys,json d=json.load\\(sys.stdin\\) print\\(f'active={d[\\\\\"active\\\\\"]} queued={d[\\\\\"queued\\\\\"]} total={len\\(d[\\\\\"sessions\\\\\"]\\)}'\\) for s in d['sessions']: print\\(f' {s[\\\\\"id\\\\\"][:12]} {s[\\\\\"state\\\\\"]:10s} {s.get\\(\\\\\"client_name\\\\\",\\\\\"\\\\\"\\):20s} {s.get\\(\\\\\"created_at\\\\\",\\\\\"\\\\\"\\)[:19]}'\\) \" echo \"---\" curl -s http://localhost:9401/api/v1/history/sessions)",
       "Bash(python3 -c \" import sys,json d=json.load\\(sys.stdin\\) sessions = d if isinstance\\(d, list\\) else d.get\\('sessions', []\\) print\\(f'history: {len\\(sessions\\)} sessions'\\) for s in sessions[:5]: print\\(f' {s.get\\(\\\\\"id\\\\\",\\\\\"\\\\\"\\)[:12]} {s.get\\(\\\\\"state\\\\\",\\\\\"\\\\\"\\):10s} {s.get\\(\\\\\"created_at\\\\\",\\\\\"\\\\\"\\)[:19]} dur={s.get\\(\\\\\"duration_seconds\\\\\",0\\)}s'\\) \")",
-      "Bash(curl -s -X DELETE http://localhost:9401/api/v1/sessions/ee9afd32-602)"
+      "Bash(curl -s -X DELETE http://localhost:9401/api/v1/sessions/ee9afd32-602)",
+      "Bash(sed -n '216,222p' /Users/humblefool2909/drizz-farm/internal/session/broker.go)",
+      "Bash(sed -n '232,238p' /Users/humblefool2909/drizz-farm/internal/session/broker.go)",
+      "Bash(sed -n '376,382p' /Users/humblefool2909/drizz-farm/internal/session/broker.go)",
+      "Bash(sed -i '' 's/sess.Source, \"released\", sess.Connection.ADBPort/sess.Source, \"released\", b.nodeName, sess.Connection.ADBPort/' internal/session/broker.go)",
+      "Bash(sed -i '' 's/sess.Source, \"active\", conn.ADBPort/sess.Source, \"active\", b.nodeName, conn.ADBPort/' internal/session/broker.go)",
+      "Bash(sed -i '' 's/sess.Source, \"timed_out\", sess.Connection.ADBPort/sess.Source, \"timed_out\", b.nodeName, sess.Connection.ADBPort/' internal/session/broker.go)",
+      "Bash(sed -i '' 's/\"cli\", \"released\", 5555/\"cli\", \"released\", \"test-node\", 5555/g' internal/store/store_test.go)",
+      "Bash(sed -i '' 's/\"cli\", \"active\", 5555/\"cli\", \"active\", \"test-node\", 5555/g' internal/store/store_test.go)",
+      "Bash(curl -s -X POST http://localhost:9401/api/v1/sessions -H 'Content-Type: application/json' -d '{\"platform\":\"android\",\"source\":\"test\"}')",
+      "Bash(curl -s -X DELETE http://localhost:9401/api/v1/sessions/4ec60138-303)",
+      "Bash(./scripts/run-parallel.sh)",
+      "Bash(sqlite3 ~/.drizz-farm/drizz-farm.db \"SELECT id, node_name, serial, state, duration_seconds FROM sessions ORDER BY created_at DESC LIMIT 5;\")"
     ]
   }
 }
