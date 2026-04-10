@@ -234,26 +234,18 @@ func (h *webrtcHandlers) readNALsAndSend(ctx context.Context, reader io.Reader, 
 				case 8: // PPS
 					*pps = make([]byte, len(nalData))
 					copy(*pps, nalData)
-				case 5: // IDR (keyframe) — prepend SPS+PPS
-					// Build complete access unit: SPS + PPS + IDR
+				case 5: // IDR (keyframe) — prepend SPS+PPS in Annex B
+					// Pion expects Annex B format with start codes
+					accessUnit = accessUnit[:0]
 					if *sps != nil && *pps != nil {
-						accessUnit = append(accessUnit[:0],
-							// SPS with length prefix (AVCC-style 4-byte length)
-							byte(len(*sps)>>24), byte(len(*sps)>>16), byte(len(*sps)>>8), byte(len(*sps)),
-						)
+						accessUnit = append(accessUnit, 0, 0, 0, 1)
 						accessUnit = append(accessUnit, *sps...)
-						accessUnit = append(accessUnit,
-							byte(len(*pps)>>24), byte(len(*pps)>>16), byte(len(*pps)>>8), byte(len(*pps)),
-						)
+						accessUnit = append(accessUnit, 0, 0, 0, 1)
 						accessUnit = append(accessUnit, *pps...)
 					}
-					// Add IDR
-					accessUnit = append(accessUnit,
-						byte(len(nalData)>>24), byte(len(nalData)>>16), byte(len(nalData)>>8), byte(len(nalData)),
-					)
+					accessUnit = append(accessUnit, 0, 0, 0, 1)
 					accessUnit = append(accessUnit, nalData...)
 
-					// Send as one sample
 					now := time.Now()
 					duration := now.Sub(lastSend)
 					if duration < time.Millisecond {
@@ -270,12 +262,9 @@ func (h *webrtcHandlers) readNALsAndSend(ctx context.Context, reader io.Reader, 
 					accessUnit = accessUnit[:0]
 
 				case 1: // Non-IDR slice (P/B frame)
-					// Send as single sample with length prefix
+					// Send raw NAL in Annex B
 					frame := make([]byte, 4+len(nalData))
-					frame[0] = byte(len(nalData) >> 24)
-					frame[1] = byte(len(nalData) >> 16)
-					frame[2] = byte(len(nalData) >> 8)
-					frame[3] = byte(len(nalData))
+					frame[0] = 0; frame[1] = 0; frame[2] = 0; frame[3] = 1
 					copy(frame[4:], nalData)
 
 					now := time.Now()

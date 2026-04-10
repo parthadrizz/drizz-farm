@@ -118,7 +118,8 @@
       "Bash(git commit -m 'fix: watchDevice only removes if device gone from ADB \\(not health check failures\\):*)",
       "Bash(grep -l \"webrtc\" /Users/humblefool2909/drizz-farm/internal/api/dashboard/assets/*.js)",
       "Bash(grep -l \"webrtc\" /Users/humblefool2909/drizz-farm/web/dist/assets/*.js)",
-      "Bash(git commit -m 'fix: always render video+canvas, toggle with CSS hidden — fixes null ref on ontrack:*)"
+      "Bash(git commit -m 'fix: always render video+canvas, toggle with CSS hidden — fixes null ref on ontrack:*)",
+      "Bash(git commit -m 'fix: send Annex B H.264 to Pion \\(not AVCC\\) — Pion handles FU-A fragmentation:*)"
     ]
   }
 }
