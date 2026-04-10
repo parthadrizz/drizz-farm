@@ -139,6 +139,26 @@ export function LiveView() {
     }
   }, [canvasCoords, sendInput]);
 
+  // Pinch zoom — Alt+scroll on canvas
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const handleWheel = (e: WheelEvent) => {
+      if (!e.altKey) return; // Only zoom with Alt held
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      const cx = Math.round((e.clientX - rect.left) * scaleX);
+      const cy = Math.round((e.clientY - rect.top) * scaleY);
+      const dist = e.deltaY > 0 ? -200 : 200; // scroll down = zoom out, up = zoom in
+      // Simulate pinch: two opposite swipes from center
+      sendInput(`swipe ${cx - dist} ${cy - dist} ${cx + dist} ${cy + dist} 300`);
+    };
+    canvas.addEventListener('wheel', handleWheel, { passive: false });
+    return () => canvas.removeEventListener('wheel', handleWheel);
+  }, [sendInput]);
+
   // Keyboard input — forward keystrokes to emulator
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -198,9 +218,10 @@ export function LiveView() {
           )}
         </div>
         <div className="flex gap-1 mt-2 justify-center flex-wrap">
-          <button onClick={() => sendInput('back')} className="px-3 py-1 bg-gray-800 rounded text-[10px] hover:bg-gray-700">◀ Back</button>
-          <button onClick={() => sendInput('home')} className="px-3 py-1 bg-gray-800 rounded text-[10px] hover:bg-gray-700">● Home</button>
-          <button onClick={() => sendInput('recent')} className="px-3 py-1 bg-gray-800 rounded text-[10px] hover:bg-gray-700">■ Recent</button>
+          <button onClick={() => sendInput('back')} className="px-2 py-1 bg-gray-800 rounded text-[10px] hover:bg-gray-700">◀ Back</button>
+          <button onClick={() => sendInput('home')} className="px-2 py-1 bg-gray-800 rounded text-[10px] hover:bg-gray-700">● Home</button>
+          <button onClick={() => sendInput('recent')} className="px-2 py-1 bg-gray-800 rounded text-[10px] hover:bg-gray-700">■ Recent</button>
+          <button onClick={() => sendInput('key 26')} className="px-2 py-1 bg-gray-800 rounded text-[10px] hover:bg-gray-700">⏻ Power</button>
           <button onClick={async () => {
             if (!id) return;
             const r = await api.execADB(id, "dumpsys activity recents | grep realActivity");
@@ -301,6 +322,45 @@ export function LiveView() {
           <div className="flex gap-2">
             <input type="text" placeholder="https://..." className="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-[10px] focus:outline-none focus:border-emerald-400"
               onKeyDown={e => { if (e.key === 'Enter' && id) api.openDeeplink(id, (e.target as HTMLInputElement).value); }} />
+          </div>
+        </Panel>
+
+        {/* Phone + SMS */}
+        <div className="grid grid-cols-2 gap-3">
+          <Panel title="Phone Call">
+            <div className="flex gap-1.5">
+              <input type="text" placeholder="+1234567890" id="phone-num" className="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-[10px] font-mono focus:outline-none focus:border-emerald-400" />
+              <button onClick={() => {
+                const num = (document.getElementById('phone-num') as HTMLInputElement)?.value;
+                if (id && num) api.execADB(id, `emu gsm call ${num}`);
+              }} className="px-2 py-1 bg-emerald-500/20 text-emerald-400 rounded text-[10px]">Call</button>
+            </div>
+          </Panel>
+          <Panel title="SMS">
+            <div className="flex gap-1.5">
+              <input type="text" placeholder="Message..." id="sms-text" className="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-[10px] focus:outline-none focus:border-emerald-400" />
+              <button onClick={() => {
+                const txt = (document.getElementById('sms-text') as HTMLInputElement)?.value;
+                if (id && txt) api.execADB(id, `emu sms send 1234567890 ${txt}`);
+              }} className="px-2 py-1 bg-blue-500/20 text-blue-400 rounded text-[10px]">Send</button>
+            </div>
+          </Panel>
+        </div>
+
+        {/* D-pad */}
+        <Panel title="D-Pad">
+          <div className="flex justify-center">
+            <div className="grid grid-cols-3 gap-1 w-fit">
+              <div />
+              <button onClick={() => sendInput('key 19')} className="px-3 py-1.5 bg-gray-800 rounded text-[10px] hover:bg-gray-700">▲</button>
+              <div />
+              <button onClick={() => sendInput('key 21')} className="px-3 py-1.5 bg-gray-800 rounded text-[10px] hover:bg-gray-700">◀</button>
+              <button onClick={() => sendInput('key 23')} className="px-3 py-1.5 bg-gray-800 rounded text-[10px] hover:bg-gray-700">●</button>
+              <button onClick={() => sendInput('key 22')} className="px-3 py-1.5 bg-gray-800 rounded text-[10px] hover:bg-gray-700">▶</button>
+              <div />
+              <button onClick={() => sendInput('key 20')} className="px-3 py-1.5 bg-gray-800 rounded text-[10px] hover:bg-gray-700">▼</button>
+              <div />
+            </div>
           </div>
         </Panel>
 
