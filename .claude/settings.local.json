@@ -115,7 +115,9 @@
       "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(f'instances={len\\(d[\\\\\"instances\\\\\"]\\)}'\\); [print\\(f'  {i[\\\\\"id\\\\\"]} {i[\\\\\"device_name\\\\\"]}'\\) for i in d['instances']]\")",
       "Bash(git commit -m 'fix: proper H.264 codec registration + PLI interceptor for WebRTC:*)",
       "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(f'ID={d[\\\\\"id\\\\\"]} inst={d[\\\\\"instance_id\\\\\"]}'\\)\")",
-      "Bash(git commit -m 'fix: watchDevice only removes if device gone from ADB \\(not health check failures\\):*)"
+      "Bash(git commit -m 'fix: watchDevice only removes if device gone from ADB \\(not health check failures\\):*)",
+      "Bash(grep -l \"webrtc\" /Users/humblefool2909/drizz-farm/internal/api/dashboard/assets/*.js)",
+      "Bash(grep -l \"webrtc\" /Users/humblefool2909/drizz-farm/web/dist/assets/*.js)"
     ]
   }
 }

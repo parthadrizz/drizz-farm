@@ -51,11 +51,18 @@ export function LiveView() {
 
         // Receive video track
         pc.ontrack = (event) => {
-          if (videoRef.current && event.streams[0]) {
-            videoRef.current.srcObject = event.streams[0];
-            videoRef.current.play();
+          console.log('WebRTC: ontrack fired', event.track.kind, event.streams.length);
+          if (videoRef.current) {
+            if (event.streams[0]) {
+              videoRef.current.srcObject = event.streams[0];
+            } else {
+              // No stream — create one from the track
+              const stream = new MediaStream([event.track]);
+              videoRef.current.srcObject = stream;
+            }
+            videoRef.current.play().catch(e => console.warn('play failed:', e));
             setConnected(true);
-            console.log('WebRTC: video track received');
+            console.log('WebRTC: video attached to element');
           }
         };
 
