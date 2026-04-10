@@ -106,7 +106,8 @@
       "Bash(git commit -m 'fix: remove unused exec helper:*)",
       "Bash(scrcpy --version)",
       "Bash(ffmpeg -version)",
-      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(f'instances: {len\\(d[\\\\\"instances\\\\\"]\\)}, allocated: {d[\\\\\"allocated\\\\\"]}'\\)\")"
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(f'instances: {len\\(d[\\\\\"instances\\\\\"]\\)}, allocated: {d[\\\\\"allocated\\\\\"]}'\\)\")",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); [print\\(f'{i[\\\\\"device_name\\\\\"]} [{i[\\\\\"state\\\\\"]}] serial={i[\\\\\"serial\\\\\"]}'\\) for i in d['instances']]\")"
     ]
   }
 }

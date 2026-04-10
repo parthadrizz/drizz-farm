@@ -53,19 +53,35 @@ func (d *RunningEmulatorDevice) Prepare(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	// Read AVD name from device
-	name, err := d.adb.Shell(ctx, d.serial, "getprop ro.kernel.qemu.avd_name")
-	if err == nil && strings.TrimSpace(name) != "" {
-		d.name = strings.TrimSpace(name)
-	} else {
-		// Fallback: try boot.hardware
-		model, _ := d.adb.GetProp(ctx, d.serial, "ro.product.model")
-		if model != "" {
-			d.name = model
-		} else {
-			d.name = d.serial
+	// Try multiple properties to find the AVD name
+	for _, prop := range []string{
+		"ro.kernel.qemu.avd_name",
+		"ro.boot.qemu.avd_name",
+		"ro.product.model",
+	} {
+		val, err := d.adb.GetProp(ctx, d.serial, prop)
+		if err == nil && strings.TrimSpace(val) != "" {
+			d.name = strings.TrimSpace(val)
+			return nil
 		}
 	}
+
+	// Last resort: use shell to check emulator window title
+	output, err := d.adb.Shell(ctx, d.serial, "getprop | grep avd")
+	if err == nil && output != "" {
+		// Parse "[ro.boot.qemu.avd_name]: [drizz_api34_ext8_play_0]"
+		for _, line := range strings.Split(output, "\n") {
+			if strings.Contains(line, "avd_name") {
+				parts := strings.SplitN(line, "]: [", 2)
+				if len(parts) == 2 {
+					d.name = strings.TrimSuffix(strings.TrimSpace(parts[1]), "]")
+					return nil
+				}
+			}
+		}
+	}
+
+	d.name = d.serial
 	return nil
 }
 

@@ -212,10 +212,16 @@ function NodeDeviceList({
   const badgeStyle: Record<string, string> = { warm: 'bg-emerald-400/10 text-emerald-400', allocated: 'bg-blue-400/10 text-blue-400', booting: 'bg-yellow-400/10 text-yellow-400', resetting: 'bg-orange-400/10 text-orange-400', error: 'bg-red-400/10 text-red-400', offline: 'bg-gray-700 text-gray-400' };
 
   // For remote nodes, show instances from pool directly
+  // Build display: AVDs from disk + pool instances not matching any AVD + USB devices
+  const avdSet = new Set(avds);
   const displayItems = isRemote
     ? instances.map(inst => ({ name: inst.device_name, inst, state: inst.state }))
     : [
+        // AVDs from disk, overlaid with pool state
         ...avds.map(name => ({ name, inst: poolByName.get(name), state: poolByName.get(name)?.state || 'offline' })),
+        // Pool instances not matching any AVD (adopted running emulators)
+        ...instances.filter(i => !avdSet.has(i.device_name) && i.device_kind !== 'android_usb').map(inst => ({ name: inst.device_name, inst, state: inst.state })),
+        // USB devices
         ...instances.filter(i => i.device_kind === 'android_usb').map(inst => ({ name: inst.device_name, inst, state: inst.state })),
       ];
 
