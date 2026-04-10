@@ -177,7 +177,8 @@
       "Bash(python3 -c \" import sys,json d=json.load\\(sys.stdin\\) print\\(f'Leader: {d.get\\(\\\\\"leader\\\\\",\\\\\"?\\\\\"\\)}'\\) print\\(f'Nodes: {d[\\\\\"total_nodes\\\\\"]}'\\) for n in d['nodes']: print\\(f' {n[\\\\\"name\\\\\"]:30s} role={n[\\\\\"role\\\\\"]:6s} score={n.get\\(\\\\\"score\\\\\",0\\)} cpu={n.get\\(\\\\\"num_cpu\\\\\",0\\)} mem={n.get\\(\\\\\"memory_mb\\\\\",0\\)}MB'\\) \")",
       "Bash(go test:*)",
       "Bash(go doc:*)",
-      "Bash(grep -n \"^func \\(h \\\\*.*Handlers\\) [A-Z]\" /Users/humblefool2909/drizz-farm/internal/api/handlers_*.go)"
+      "Bash(grep -n \"^func \\(h \\\\*.*Handlers\\) [A-Z]\" /Users/humblefool2909/drizz-farm/internal/api/handlers_*.go)",
+      "Bash(chmod +x /Users/humblefool2909/drizz-farm/ci/drizz-farm-session.sh)"
     ]
   }
 }

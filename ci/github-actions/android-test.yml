@@ -1,0 +1,116 @@
+# drizz-farm: Android Test on Real Device Pool
+# Add this to your .github/workflows/ directory.
+#
+# Prerequisites:
+#   - drizz-farm running on your LAN (e.g. Mac Mini at 192.168.1.100:9401)
+#   - Self-hosted runner on the same LAN (or use FARM_URL with a tunnel)
+#
+# Supports: Espresso, Maestro, Appium, Flutter, Detox, UIAutomator, or any
+# framework that connects via ADB serial or Appium WebDriver URL.
+
+name: Android Tests (drizz-farm)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  FARM_URL: ${{ vars.DRIZZ_FARM_URL || 'http://localhost:9401' }}
+
+jobs:
+  test:
+    runs-on: self-hosted  # Must be on same LAN as drizz-farm
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Acquire device from drizz-farm
+        id: device
+        run: |
+          echo "Requesting device from $FARM_URL..."
+          RESPONSE=$(curl -sf -X POST "$FARM_URL/api/v1/sessions" \
+            -H "Content-Type: application/json" \
+            --max-time 300 \
+            -d '{"platform":"android","source":"github-actions","client_name":"${{ github.run_id }}"}')
+
+          SESSION_ID=$(echo "$RESPONSE" | jq -r '.id')
+          ADB_SERIAL=$(echo "$RESPONSE" | jq -r '.connection.adb_serial')
+          ADB_HOST=$(echo "$RESPONSE" | jq -r '.connection.host')
+          ADB_PORT=$(echo "$RESPONSE" | jq -r '.connection.adb_port')
+          APPIUM_URL=$(echo "$RESPONSE" | jq -r '.connection.appium_url')
+          NODE_NAME=$(echo "$RESPONSE" | jq -r '.node_name')
+
+          echo "session_id=$SESSION_ID" >> $GITHUB_OUTPUT
+          echo "adb_serial=$ADB_SERIAL" >> $GITHUB_OUTPUT
+          echo "adb_host=$ADB_HOST" >> $GITHUB_OUTPUT
+          echo "adb_port=$ADB_PORT" >> $GITHUB_OUTPUT
+          echo "appium_url=$APPIUM_URL" >> $GITHUB_OUTPUT
+          echo "node_name=$NODE_NAME" >> $GITHUB_OUTPUT
+
+          echo "Device acquired: $ADB_SERIAL on $NODE_NAME (session: $SESSION_ID)"
+
+      - name: Start video recording
+        if: always()
+        run: |
+          curl -sf -X POST "$FARM_URL/api/v1/sessions/${{ steps.device.outputs.session_id }}/recording/start" || true
+
+      # ---- REPLACE THIS SECTION WITH YOUR TEST FRAMEWORK ----
+
+      # Option A: Espresso
+      # - name: Run Espresso tests
+      #   run: |
+      #     ./gradlew connectedAndroidTest \
+      #       -Pandroid.testInstrumentationRunnerArguments.device=${{ steps.device.outputs.adb_serial }}
+
+      # Option B: Maestro
+      # - name: Run Maestro tests
+      #   run: |
+      #     maestro --device ${{ steps.device.outputs.adb_serial }} test .maestro/
+
+      # Option C: Appium (Python)
+      # - name: Run Appium tests
+      #   env:
+      #     APPIUM_URL: ${{ steps.device.outputs.appium_url }}
+      #     DEVICE_SERIAL: ${{ steps.device.outputs.adb_serial }}
+      #   run: pytest tests/
+
+      # Option D: Flutter
+      # - name: Run Flutter integration tests
+      #   run: |
+      #     flutter test integration_test/ --device-id=${{ steps.device.outputs.adb_serial }}
+
+      # ---- END FRAMEWORK SECTION ----
+
+      - name: Stop recording & save artifacts
+        if: always()
+        run: |
+          SESSION="${{ steps.device.outputs.session_id }}"
+
+          # Screenshot
+          curl -sf -X POST "$FARM_URL/api/v1/sessions/$SESSION/screenshot" || true
+
+          # Stop recording and download
+          curl -sf -X POST "$FARM_URL/api/v1/sessions/$SESSION/recording/stop" || true
+          sleep 2
+          curl -sf "$FARM_URL/api/v1/sessions/$SESSION/recording/download" -o recording.mp4 || true
+
+          # Logcat
+          curl -sf "$FARM_URL/api/v1/sessions/$SESSION/logcat/download" -o logcat.txt || true
+
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-test-artifacts
+          path: |
+            recording.mp4
+            logcat.txt
+          retention-days: 7
+
+      - name: Release device
+        if: always()
+        run: |
+          curl -sf -X DELETE "$FARM_URL/api/v1/sessions/${{ steps.device.outputs.session_id }}" || true
+          echo "Device released"

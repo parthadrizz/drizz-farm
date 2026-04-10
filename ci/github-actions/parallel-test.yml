@@ -1,0 +1,80 @@
+# drizz-farm: Parallel Android Tests with Matrix Strategy
+# Runs N test shards in parallel, each on its own emulator.
+# drizz-farm handles queuing if more shards than available devices.
+
+name: Parallel Android Tests (drizz-farm)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  FARM_URL: ${{ vars.DRIZZ_FARM_URL || 'http://localhost:9401' }}
+
+jobs:
+  test:
+    runs-on: self-hosted
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]  # 4 shards — adjust based on test count
+        # If drizz-farm has max_concurrent=3, shard 4 will queue until one finishes
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Acquire device (shard ${{ matrix.shard }})
+        id: device
+        run: |
+          RESPONSE=$(curl -sf -X POST "$FARM_URL/api/v1/sessions" \
+            -H "Content-Type: application/json" \
+            --max-time 300 \
+            -d '{"platform":"android","source":"github-actions","client_name":"shard-${{ matrix.shard }}-${{ github.run_id }}"}')
+
+          echo "session_id=$(echo $RESPONSE | jq -r '.id')" >> $GITHUB_OUTPUT
+          echo "adb_serial=$(echo $RESPONSE | jq -r '.connection.adb_serial')" >> $GITHUB_OUTPUT
+          echo "appium_url=$(echo $RESPONSE | jq -r '.connection.appium_url')" >> $GITHUB_OUTPUT
+
+      - name: Start recording
+        run: curl -sf -X POST "$FARM_URL/api/v1/sessions/${{ steps.device.outputs.session_id }}/recording/start" || true
+
+      - name: Run test shard ${{ matrix.shard }}
+        env:
+          DEVICE_SERIAL: ${{ steps.device.outputs.adb_serial }}
+          APPIUM_URL: ${{ steps.device.outputs.appium_url }}
+          TEST_SHARD: ${{ matrix.shard }}
+          TOTAL_SHARDS: 4
+        run: |
+          # Example: Maestro with shard filtering
+          # maestro --device $DEVICE_SERIAL test .maestro/ --shard $TEST_SHARD/$TOTAL_SHARDS
+
+          # Example: Espresso with shard
+          # ./gradlew connectedAndroidTest \
+          #   -Pandroid.testInstrumentationRunnerArguments.numShards=$TOTAL_SHARDS \
+          #   -Pandroid.testInstrumentationRunnerArguments.shardIndex=$((TEST_SHARD - 1))
+
+          echo "Running shard $TEST_SHARD/$TOTAL_SHARDS on $DEVICE_SERIAL"
+
+      - name: Collect artifacts
+        if: always()
+        run: |
+          SESSION="${{ steps.device.outputs.session_id }}"
+          curl -sf -X POST "$FARM_URL/api/v1/sessions/$SESSION/recording/stop" || true
+          sleep 2
+          curl -sf "$FARM_URL/api/v1/sessions/$SESSION/recording/download" -o "recording-shard-${{ matrix.shard }}.mp4" || true
+          curl -sf "$FARM_URL/api/v1/sessions/$SESSION/logcat/download" -o "logcat-shard-${{ matrix.shard }}.txt" || true
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-artifacts-shard-${{ matrix.shard }}
+          path: |
+            recording-shard-${{ matrix.shard }}.mp4
+            logcat-shard-${{ matrix.shard }}.txt
+
+      - name: Release device
+        if: always()
+        run: curl -sf -X DELETE "$FARM_URL/api/v1/sessions/${{ steps.device.outputs.session_id }}" || true

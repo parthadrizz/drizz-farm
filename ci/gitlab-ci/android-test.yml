@@ -1,0 +1,70 @@
+# drizz-farm: Android Test Template for GitLab CI
+# Include in your .gitlab-ci.yml:
+#   include:
+#     - local: 'ci/gitlab-ci/android-test.yml'
+#
+# Variables to set:
+#   DRIZZ_FARM_URL: http://your-mac-mini:9401 (or use default localhost)
+
+variables:
+  FARM_URL: ${DRIZZ_FARM_URL:-http://localhost:9401}
+
+.drizz-farm-test:
+  tags: [self-hosted]  # Runner must be on same LAN as drizz-farm
+  timeout: 30 minutes
+
+  before_script:
+    # Acquire device
+    - >
+      RESPONSE=$(curl -sf -X POST "$FARM_URL/api/v1/sessions"
+      -H "Content-Type: application/json"
+      --max-time 300
+      -d "{\"platform\":\"android\",\"source\":\"gitlab-ci\",\"client_name\":\"$CI_JOB_ID\"}")
+    - export SESSION_ID=$(echo $RESPONSE | jq -r '.id')
+    - export ADB_SERIAL=$(echo $RESPONSE | jq -r '.connection.adb_serial')
+    - export ADB_HOST=$(echo $RESPONSE | jq -r '.connection.host')
+    - export ADB_PORT=$(echo $RESPONSE | jq -r '.connection.adb_port')
+    - export APPIUM_URL=$(echo $RESPONSE | jq -r '.connection.appium_url')
+    - echo "Device acquired - $ADB_SERIAL (session $SESSION_ID)"
+    # Start recording
+    - curl -sf -X POST "$FARM_URL/api/v1/sessions/$SESSION_ID/recording/start" || true
+
+  after_script:
+    # Stop recording
+    - curl -sf -X POST "$FARM_URL/api/v1/sessions/$SESSION_ID/recording/stop" || true
+    - sleep 2
+    # Download artifacts
+    - curl -sf "$FARM_URL/api/v1/sessions/$SESSION_ID/recording/download" -o recording.mp4 || true
+    - curl -sf "$FARM_URL/api/v1/sessions/$SESSION_ID/logcat/download" -o logcat.txt || true
+    # Release device
+    - curl -sf -X DELETE "$FARM_URL/api/v1/sessions/$SESSION_ID" || true
+
+  artifacts:
+    when: always
+    paths:
+      - recording.mp4
+      - logcat.txt
+    expire_in: 7 days
+
+# --- Example jobs using the template ---
+
+# espresso:
+#   extends: .drizz-farm-test
+#   script:
+#     - ./gradlew connectedAndroidTest
+
+# maestro:
+#   extends: .drizz-farm-test
+#   script:
+#     - maestro --device $ADB_SERIAL test .maestro/
+
+# appium:
+#   extends: .drizz-farm-test
+#   script:
+#     - pytest tests/ --appium-url=$APPIUM_URL --device=$ADB_SERIAL
+
+# parallel-shards:
+#   extends: .drizz-farm-test
+#   parallel: 4
+#   script:
+#     - maestro --device $ADB_SERIAL test .maestro/ --shard $CI_NODE_INDEX/$CI_NODE_TOTAL
