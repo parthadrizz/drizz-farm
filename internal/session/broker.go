@@ -122,34 +122,7 @@ func (b *Broker) Create(ctx context.Context, req CreateSessionRequest) (*Session
 					log.Info().Str("peer", peer.Name).Str("host", peer.Host).Msg("broker: routing to peer")
 					result, fedErr := b.federation.CreateRemoteSession(peer, req.Profile)
 					if fedErr == nil {
-						// Store the remote session info so we can proxy release/artifacts
-						remoteSess := &Session{
-							ID:         result["id"].(string),
-							Profile:    req.Profile,
-							Platform:   req.Platform,
-							State:      SessionActive,
-							Source:     req.Source,
-							CreatedAt:  time.Now(),
-							ExpiresAt:  time.Now().Add(time.Duration(b.cfg.Pool.SessionTimeoutMinutes) * time.Minute),
-						}
-						// Extract connection info
-						if conn, ok := result["connection"].(map[string]any); ok {
-							remoteSess.Connection = ConnectionInfo{
-								Host:      fmt.Sprintf("%v", conn["host"]),
-								AppiumURL: fmt.Sprintf("%v", conn["appium_url"]),
-								ADBSerial: fmt.Sprintf("%v", conn["adb_serial"]),
-							}
-							if port, ok := conn["adb_port"].(float64); ok {
-								remoteSess.Connection.ADBPort = int(port)
-							}
-						}
-						// Track which node owns it
-						remoteSess.InstanceID = fmt.Sprintf("remote:%s:%d/%s", peer.Host, peer.Port, result["id"])
-
-						b.mu.Lock()
-						b.sessions[remoteSess.ID] = remoteSess
-						b.mu.Unlock()
-
+						remoteSess := b.buildRemoteSession(peer, result, req)
 						log.Info().Str("session", remoteSess.ID).Str("peer", peer.Name).Msg("broker: remote session created")
 						return remoteSess, nil
 					}
@@ -248,6 +221,38 @@ func (b *Broker) Release(ctx context.Context, id string) error {
 	return nil
 }
 
+// buildRemoteSession creates a Session from a federation peer's response.
+func (b *Broker) buildRemoteSession(peer *federation.Peer, result map[string]any, req CreateSessionRequest) *Session {
+	remoteSess := &Session{
+		ID:         result["id"].(string),
+		NodeName:   peer.Name,
+		Profile:    req.Profile,
+		Platform:   req.Platform,
+		State:      SessionActive,
+		Source:     req.Source,
+		CreatedAt:  time.Now(),
+		ExpiresAt:  time.Now().Add(time.Duration(b.cfg.Pool.SessionTimeoutMinutes) * time.Minute),
+	}
+	if conn, ok := result["connection"].(map[string]any); ok {
+		remoteSess.Connection = ConnectionInfo{
+			Host:      fmt.Sprintf("%v", conn["host"]),
+			NodeName:  peer.Name,
+			AppiumURL: fmt.Sprintf("%v", conn["appium_url"]),
+			ADBSerial: fmt.Sprintf("%v", conn["adb_serial"]),
+		}
+		if port, ok := conn["adb_port"].(float64); ok {
+			remoteSess.Connection.ADBPort = int(port)
+		}
+	}
+	remoteSess.InstanceID = fmt.Sprintf("remote:%s:%d/%s", peer.Host, peer.Port, result["id"])
+
+	b.mu.Lock()
+	b.sessions[remoteSess.ID] = remoteSess
+	b.mu.Unlock()
+
+	return remoteSess
+}
+
 // drainQueue checks if there are queued requests and tries to allocate devices to them.
 func (b *Broker) drainQueue(ctx context.Context) {
 	entry := b.queue.TryDequeue()
@@ -259,7 +264,21 @@ func (b *Broker) drainQueue(ctx context.Context) {
 
 	inst, err := b.pool.Allocate(ctx, entry.Request.Profile)
 	if err != nil {
-		// Still no capacity — put it back at the front
+		// Local pool still full — try federation peers
+		if b.federation != nil && b.federation.PeerCount() > 0 {
+			peer := b.federation.FindPeerWithCapacity()
+			if peer != nil {
+				log.Info().Str("peer", peer.Name).Msg("broker: queue drain routing to peer")
+				result, fedErr := b.federation.CreateRemoteSession(peer, entry.Request.Profile)
+				if fedErr == nil {
+					remoteSess := b.buildRemoteSession(peer, result, entry.Request)
+					entry.ResultCh <- QueueResult{Session: remoteSess}
+					log.Info().Str("session", remoteSess.ID).Str("peer", peer.Name).Msg("broker: queued request fulfilled via federation")
+					return
+				}
+			}
+		}
+		// No local or remote capacity — re-queue
 		log.Debug().Err(err).Msg("broker: queue drain failed, re-queueing")
 		b.queue.PushFront(entry)
 		return

@@ -42,7 +42,7 @@ export function Dashboard() {
 
       // Fetch remote pools for peer nodes
       if (fed && fed.nodes) {
-        const peerNodes = fed.nodes.filter((n: FederationNode) => n.role === 'worker' && n.healthy);
+        const peerNodes = fed.nodes.filter((n: FederationNode) => n.role !== 'self' && n.healthy);
         const remoteData = new Map<string, PoolStatus>();
         await Promise.all(peerNodes.map(async (n: FederationNode) => {
           try {
@@ -145,6 +145,7 @@ export function Dashboard() {
         poolByName={poolByName}
         instances={pool.instances}
         actionLoading={actionLoading}
+        isLeader={!hasPeers || federation?.nodes?.find(n => n.name === health.node || n.host === `${health.node}`)?.role === 'leader'}
         onBoot={(name) => handleBoot(name)}
         onShutdown={(inst) => handleShutdown(inst)}
         onRelease={handleRelease}
@@ -153,7 +154,7 @@ export function Dashboard() {
 
       {/* Peer nodes */}
       {hasPeers && federation!.nodes
-        .filter(n => n.role === 'worker' && n.healthy)
+        .filter(n => n.role !== 'self' && n.healthy)
         .map(node => {
           const remotePool = remoteNodes.get(node.host);
           const remoteByName = new Map<string, DeviceInstance>();
@@ -181,7 +182,7 @@ export function Dashboard() {
 
       {/* Peer nodes that are down */}
       {hasPeers && federation!.nodes
-        .filter(n => n.role === 'worker' && !n.healthy)
+        .filter(n => n.role !== 'self' && !n.healthy)
         .map(node => (
           <div key={node.host} className="bg-gray-900 rounded-lg border border-red-900/50 p-3">
             <div className="flex items-center justify-between">
@@ -199,14 +200,14 @@ export function Dashboard() {
 
 function NodeDeviceList({
   title, subtitle, avds, poolByName, instances, actionLoading,
-  onBoot, onShutdown, onRelease, onView, isRemote, nodeAddr: _nodeAddr
+  onBoot, onShutdown, onRelease, onView, isRemote, isLeader, nodeAddr: _nodeAddr
 }: {
   title: string; subtitle: string;
   avds: string[]; poolByName: Map<string, DeviceInstance>; instances: DeviceInstance[];
   actionLoading: string | null;
   onBoot: (name: string) => void; onShutdown: (inst: DeviceInstance) => void;
   onRelease: (id: string) => void; onView: (id: string) => void;
-  isRemote?: boolean; nodeAddr?: string; // nodeAddr kept for future direct-node links
+  isRemote?: boolean; isLeader?: boolean; nodeAddr?: string;
 }) {
   const stateColor: Record<string, string> = { warm: 'bg-emerald-400', allocated: 'bg-blue-400', booting: 'bg-yellow-400 animate-pulse', resetting: 'bg-orange-400 animate-pulse', error: 'bg-red-400', offline: 'bg-gray-600' };
   const badgeStyle: Record<string, string> = { warm: 'bg-emerald-400/10 text-emerald-400', allocated: 'bg-blue-400/10 text-blue-400', booting: 'bg-yellow-400/10 text-yellow-400', resetting: 'bg-orange-400/10 text-orange-400', error: 'bg-red-400/10 text-red-400', offline: 'bg-gray-700 text-gray-400' };
@@ -230,11 +231,9 @@ function NodeDeviceList({
       <div className="px-3 py-2 border-b border-gray-800 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">{title}</h2>
-          {isRemote ? (
-            <span className="text-[9px] bg-purple-400/10 text-purple-400 px-1.5 py-0.5 rounded">WORKER</span>
-          ) : (
-            <span className="text-[9px] bg-amber-400/10 text-amber-400 px-1.5 py-0.5 rounded">MASTER</span>
-          )}
+          <span className={`text-[9px] px-1.5 py-0.5 rounded ${
+            isLeader ? 'bg-amber-400/10 text-amber-400' : 'bg-purple-400/10 text-purple-400'
+          }`}>{isLeader ? 'LEADER' : 'NODE'}</span>
         </div>
         <span className="text-[10px] text-gray-600">{subtitle}</span>
       </div>

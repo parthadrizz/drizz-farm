@@ -8,7 +8,30 @@ export function GridView() {
 
   useEffect(() => {
     const refresh = async () => {
-      try { setPool(await api.pool()); } catch {}
+      try {
+        const localPool = await api.pool();
+        setPool(localPool);
+
+        // Also fetch peer pools for federated grid
+        const fed = await api.federationStatus().catch(() => null);
+        if (fed?.nodes) {
+          const peerNodes = fed.nodes.filter((n: any) => n.role !== 'self' && n.healthy);
+          const peerInstances: DeviceInstance[] = [];
+          await Promise.all(peerNodes.map(async (n: any) => {
+            try {
+              const rp = await api.remotePool(n.host);
+              peerInstances.push(...(rp.instances || []));
+            } catch {}
+          }));
+          // Merge peer instances into pool for display
+          if (peerInstances.length > 0) {
+            setPool(prev => prev ? {
+              ...prev,
+              instances: [...prev.instances, ...peerInstances],
+            } : prev);
+          }
+        }
+      } catch {}
     };
     refresh();
     const i = setInterval(refresh, 5000);

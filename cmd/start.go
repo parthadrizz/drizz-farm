@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -126,6 +127,11 @@ func runStart(cmd *cobra.Command, args []string) error {
 
 	// Federation registry
 	fedRegistry := federation.NewRegistry(getLANIP(), cfg.API.Port)
+	fedRegistry.UpdateSelf(cfg.Node.Name, cfg.Pool.MaxConcurrent, cfg.Pool.MaxConcurrent, runtime.NumCPU(), int(getSystemMemoryMB()))
+	fedRegistry.SetSelfUpdateFn(func() {
+		status := emulatorPool.Status()
+		fedRegistry.UpdateSelf(cfg.Node.Name, status.TotalCapacity, status.Warm, runtime.NumCPU(), int(getSystemMemoryMB()))
+	})
 	fedRegistry.StartRefreshLoop(ctx, 10*time.Second)
 
 	// Session broker
@@ -268,4 +274,10 @@ func getLANIP() string {
 		}
 	}
 	return "127.0.0.1"
+}
+
+func getSystemMemoryMB() float64 {
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	return float64(m.Sys) / 1024 / 1024
 }

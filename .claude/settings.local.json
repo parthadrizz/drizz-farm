@@ -172,7 +172,9 @@
       "Bash(curl -s -X POST http://localhost:9401/api/v1/sessions -H 'Content-Type: application/json' -d '{\"platform\":\"android\",\"source\":\"test\"}')",
       "Bash(curl -s -X DELETE http://localhost:9401/api/v1/sessions/4ec60138-303)",
       "Bash(./scripts/run-parallel.sh)",
-      "Bash(sqlite3 ~/.drizz-farm/drizz-farm.db \"SELECT id, node_name, serial, state, duration_seconds FROM sessions ORDER BY created_at DESC LIMIT 5;\")"
+      "Bash(sqlite3 ~/.drizz-farm/drizz-farm.db \"SELECT id, node_name, serial, state, duration_seconds FROM sessions ORDER BY created_at DESC LIMIT 5;\")",
+      "Bash(npx vite:*)",
+      "Bash(python3 -c \" import sys,json d=json.load\\(sys.stdin\\) print\\(f'Leader: {d.get\\(\\\\\"leader\\\\\",\\\\\"?\\\\\"\\)}'\\) print\\(f'Nodes: {d[\\\\\"total_nodes\\\\\"]}'\\) for n in d['nodes']: print\\(f' {n[\\\\\"name\\\\\"]:30s} role={n[\\\\\"role\\\\\"]:6s} score={n.get\\(\\\\\"score\\\\\",0\\)} cpu={n.get\\(\\\\\"num_cpu\\\\\",0\\)} mem={n.get\\(\\\\\"memory_mb\\\\\",0\\)}MB'\\) \")"
     ]
   }
 }

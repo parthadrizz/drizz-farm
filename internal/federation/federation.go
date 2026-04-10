@@ -24,6 +24,8 @@ type Peer struct {
 	Warm      int       `json:"warm"`
 	Allocated int       `json:"allocated"`
 	Available int       `json:"available"`
+	NumCPU    int       `json:"num_cpu"`
+	MemoryMB  int       `json:"memory_mb"`
 	Healthy   bool      `json:"healthy"`
 	LastSeen  time.Time `json:"last_seen"`
 }
@@ -38,10 +40,12 @@ type PeerPool struct {
 
 // Registry tracks all known peers in the cluster.
 type Registry struct {
-	mu     sync.RWMutex
-	peers  map[string]*Peer // keyed by host:port
-	self   string           // this node's host:port
-	client *http.Client
+	mu       sync.RWMutex
+	peers    map[string]*Peer // keyed by host:port
+	self     string           // this node's host:port
+	selfPeer Peer             // this node's stats for leader election
+	selfUpdateFn func()       // called each refresh to update self stats
+	client   *http.Client
 }
 
 // NewRegistry creates a federation registry.
@@ -49,8 +53,86 @@ func NewRegistry(selfHost string, selfPort int) *Registry {
 	return &Registry{
 		peers:  make(map[string]*Peer),
 		self:   fmt.Sprintf("%s:%d", selfHost, selfPort),
+		selfPeer: Peer{
+			Host:    selfHost,
+			Port:    selfPort,
+			Healthy: true,
+		},
 		client: &http.Client{Timeout: 5 * time.Second},
 	}
+}
+
+// SetSelfUpdateFn sets a callback invoked every refresh cycle to update self stats.
+func (r *Registry) SetSelfUpdateFn(fn func()) {
+	r.selfUpdateFn = fn
+}
+
+// UpdateSelf updates this node's stats for leader election.
+func (r *Registry) UpdateSelf(name string, capacity, available, numCPU, memoryMB int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.selfPeer.Name = name
+	r.selfPeer.Capacity = capacity
+	r.selfPeer.Available = available
+	r.selfPeer.NumCPU = numCPU
+	r.selfPeer.MemoryMB = memoryMB
+	r.selfPeer.Healthy = true
+	r.selfPeer.LastSeen = time.Now()
+}
+
+// leaderScore computes a score for leader election.
+// Higher score = more suitable as leader.
+func leaderScore(p *Peer) int {
+	return p.Available*10 + p.NumCPU*5 + (p.MemoryMB/1024)*3 + p.Capacity*2
+}
+
+// IsLeader returns true if this node is the current cluster leader.
+func (r *Registry) IsLeader() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	selfScore := leaderScore(&r.selfPeer)
+	for _, p := range r.peers {
+		if !p.Healthy {
+			continue
+		}
+		peerScore := leaderScore(p)
+		if peerScore > selfScore {
+			return false
+		}
+		if peerScore == selfScore {
+			// Tiebreaker: lowest host:port
+			peerAddr := fmt.Sprintf("%s:%d", p.Host, p.Port)
+			if peerAddr < r.self {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// LeaderName returns the name of the current leader.
+func (r *Registry) LeaderName() string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	best := &r.selfPeer
+	bestScore := leaderScore(best)
+	bestAddr := r.self
+
+	for _, p := range r.peers {
+		if !p.Healthy {
+			continue
+		}
+		s := leaderScore(p)
+		addr := fmt.Sprintf("%s:%d", p.Host, p.Port)
+		if s > bestScore || (s == bestScore && addr < bestAddr) {
+			best = p
+			bestScore = s
+			bestAddr = addr
+		}
+	}
+	return best.Name
 }
 
 // AddPeer registers a discovered peer.
@@ -133,12 +215,32 @@ func (r *Registry) RefreshPeers(ctx context.Context) {
 			body, _ := io.ReadAll(resp.Body)
 			json.Unmarshal(body, &pool)
 
+			// Also fetch health for CPU/memory stats
+			var numCPU, memMB int
+			healthURL := fmt.Sprintf("http://%s/api/v1/node/health", k)
+			if hResp, hErr := r.client.Get(healthURL); hErr == nil {
+				defer hResp.Body.Close()
+				var health map[string]any
+				hBody, _ := io.ReadAll(hResp.Body)
+				json.Unmarshal(hBody, &health)
+				if res, ok := health["resources"].(map[string]any); ok {
+					if v, ok := res["num_cpu"].(float64); ok {
+						numCPU = int(v)
+					}
+					if v, ok := res["total_memory"].(float64); ok {
+						memMB = int(v / 1024 / 1024)
+					}
+				}
+			}
+
 			r.mu.Lock()
 			if p, ok := r.peers[k]; ok {
 				p.Capacity = pool.TotalCapacity
 				p.Warm = pool.Warm
 				p.Allocated = pool.Allocated
 				p.Available = pool.TotalCapacity - pool.Allocated - pool.Booting
+				p.NumCPU = numCPU
+				p.MemoryMB = memMB
 				p.Healthy = true
 				p.LastSeen = time.Now()
 			}
@@ -260,48 +362,84 @@ func (r *Registry) ShutdownRemoteInstance(nodeAddr string, instanceID string) ([
 }
 
 // GetFederatedStatus returns combined status of all nodes including self.
+// Uses dynamic leader election — role is "leader" or "node" based on score.
 func (r *Registry) GetFederatedStatus() map[string]any {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
+	isLeader := true // assume leader unless beaten
+	selfScore := leaderScore(&r.selfPeer)
+
 	nodes := make([]map[string]any, 0, len(r.peers)+1)
 
+	// Determine leader among all nodes
+	leaderAddr := r.self
+	bestScore := selfScore
+	for _, p := range r.peers {
+		if !p.Healthy {
+			continue
+		}
+		s := leaderScore(p)
+		addr := fmt.Sprintf("%s:%d", p.Host, p.Port)
+		if s > bestScore || (s == bestScore && addr < leaderAddr) {
+			leaderAddr = addr
+			bestScore = s
+			isLeader = false
+		}
+	}
+
 	// Add self
+	selfRole := "node"
+	if isLeader {
+		selfRole = "leader"
+	}
 	nodes = append(nodes, map[string]any{
-		"name":     "self",
-		"host":     r.self,
-		"role":     "orchestrator",
-		"healthy":  true,
+		"name":      r.selfPeer.Name,
+		"host":      r.self,
+		"role":      selfRole,
+		"capacity":  r.selfPeer.Capacity,
+		"available": r.selfPeer.Available,
+		"num_cpu":   r.selfPeer.NumCPU,
+		"memory_mb": r.selfPeer.MemoryMB,
+		"score":     selfScore,
+		"healthy":   true,
 	})
 
 	// Add peers
+	totalCapacity := r.selfPeer.Capacity
+	totalAllocated := r.selfPeer.Capacity - r.selfPeer.Available
+	totalAvailable := r.selfPeer.Available
+
 	for _, p := range r.peers {
+		pAddr := fmt.Sprintf("%s:%d", p.Host, p.Port)
+		role := "node"
+		if pAddr == leaderAddr {
+			role = "leader"
+		}
 		nodes = append(nodes, map[string]any{
 			"name":      p.Name,
-			"host":      fmt.Sprintf("%s:%d", p.Host, p.Port),
-			"role":      "worker",
+			"host":      pAddr,
+			"role":      role,
 			"capacity":  p.Capacity,
 			"warm":      p.Warm,
 			"allocated": p.Allocated,
 			"available": p.Available,
+			"num_cpu":   p.NumCPU,
+			"memory_mb": p.MemoryMB,
+			"score":     leaderScore(p),
 			"healthy":   p.Healthy,
 			"last_seen": p.LastSeen.Format("2006-01-02T15:04:05Z"),
 		})
-	}
-
-	totalCapacity := 0
-	totalAllocated := 0
-	totalAvailable := 0
-	for _, p := range r.peers {
 		totalCapacity += p.Capacity
 		totalAllocated += p.Allocated
 		totalAvailable += p.Available
 	}
 
 	return map[string]any{
-		"nodes":          nodes,
-		"total_nodes":    len(r.peers) + 1,
-		"total_capacity": totalCapacity,
+		"leader":          leaderAddr,
+		"nodes":           nodes,
+		"total_nodes":     len(r.peers) + 1,
+		"total_capacity":  totalCapacity,
 		"total_allocated": totalAllocated,
 		"total_available": totalAvailable,
 	}
@@ -337,6 +475,10 @@ func (r *Registry) StartRefreshLoop(ctx context.Context, interval time.Duration)
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				// Update self stats if callback set
+				if r.selfUpdateFn != nil {
+					r.selfUpdateFn()
+				}
 				r.RefreshPeers(ctx)
 				// Prune stale peers (not seen in 60s)
 				r.mu.Lock()

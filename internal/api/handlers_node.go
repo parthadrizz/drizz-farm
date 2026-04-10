@@ -55,10 +55,11 @@ func (h *nodeHandlers) Health(w http.ResponseWriter, r *http.Request) {
 			"queued": h.broker.QueueDepth(),
 		},
 		"resources": map[string]any{
-			"goroutines":   runtime.NumGoroutine(),
-			"heap_alloc":   memStats.HeapAlloc,
-			"sys":          memStats.Sys,
-			"num_cpu":      runtime.NumCPU(),
+			"goroutines":    runtime.NumGoroutine(),
+			"heap_alloc":    memStats.HeapAlloc,
+			"sys":           memStats.Sys,
+			"num_cpu":       runtime.NumCPU(),
+			"total_memory":  memStats.Sys,
 		},
 	})
 }
