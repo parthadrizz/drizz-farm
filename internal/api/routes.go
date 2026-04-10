@@ -116,6 +116,9 @@ func RegisterRoutes(r chi.Router, cfg *config.Config, p *pool.Pool, b *session.B
 		r.Post("/sessions/{id}/har/stop", recH.StopHAR)
 		r.Get("/sessions/{id}/har/download", recH.DownloadHAR)
 
+		// Permanent artifact URLs (work after session ends)
+		r.Get("/artifacts/{id}/*", recH.ServeArtifact)
+
 		// Snapshots
 		r.Post("/sessions/{id}/snapshot/save", snapH.Save)
 		r.Post("/sessions/{id}/snapshot/restore", snapH.Restore)

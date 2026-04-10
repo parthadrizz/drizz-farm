@@ -311,3 +311,43 @@ func (h *recordingHandlers) DownloadHAR(w http.ResponseWriter, r *http.Request) 
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", filepath.Base(latest)))
 	http.ServeFile(w, r, latest)
 }
+
+// ServeArtifact handles GET /api/v1/artifacts/:id/* — permanent artifact URLs
+func (h *recordingHandlers) ServeArtifact(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	filePath := chi.URLParam(r, "*")
+
+	if filePath == "" {
+		// List artifacts
+		dir := filepath.Join(h.dataDir, "artifacts", id)
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			JSON(w, 404, ErrorResponse{Error: "not_found", Message: "no artifacts", Code: 404})
+			return
+		}
+		var files []map[string]any
+		for _, e := range entries {
+			info, _ := e.Info()
+			if info != nil {
+				files = append(files, map[string]any{
+					"name": e.Name(),
+					"size": info.Size(),
+					"time": info.ModTime().Format(time.RFC3339),
+					"url":  fmt.Sprintf("/api/v1/artifacts/%s/%s", id, e.Name()),
+				})
+			}
+		}
+		JSON(w, 200, map[string]any{"artifacts": files})
+		return
+	}
+
+	// Serve file — prevent path traversal
+	fullPath := filepath.Join(h.dataDir, "artifacts", id, filePath)
+	absParent, _ := filepath.Abs(filepath.Join(h.dataDir, "artifacts", id))
+	absChild, _ := filepath.Abs(fullPath)
+	if len(absChild) < len(absParent) || absChild[:len(absParent)] != absParent {
+		JSON(w, 403, ErrorResponse{Error: "forbidden", Message: "invalid path", Code: 403})
+		return
+	}
+	http.ServeFile(w, r, fullPath)
+}

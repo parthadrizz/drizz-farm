@@ -17,6 +17,7 @@ type Config struct {
 	HealthCheck HealthCheckConfig `yaml:"health_check" mapstructure:"health_check"`
 	Cleanup     CleanupConfig     `yaml:"cleanup"     mapstructure:"cleanup"`
 	Artifacts   ArtifactsConfig   `yaml:"artifacts"   mapstructure:"artifacts"`
+	Webhooks    []WebhookConfig    `yaml:"webhooks"    mapstructure:"webhooks"`
 	License     LicenseConfig     `yaml:"license"     mapstructure:"license"`
 }
 
@@ -102,6 +103,11 @@ type ArtifactsConfig struct {
 	LogcatCapture      bool   `yaml:"logcat_capture"       mapstructure:"logcat_capture"`
 	NetworkHARCapture  bool   `yaml:"network_har_capture"  mapstructure:"network_har_capture"`
 	RetentionDays      int    `yaml:"retention_days"       mapstructure:"retention_days"`
+}
+
+type WebhookConfig struct {
+	URLs   []string `yaml:"urls"   mapstructure:"urls"`
+	Events []string `yaml:"events" mapstructure:"events"` // "session.created", "session.released", etc.
 }
 
 type LicenseConfig struct {

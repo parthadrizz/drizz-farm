@@ -93,7 +93,9 @@
       "Bash(git commit -m 'fix: actually remove mcp/node_modules from tracking:*)",
       "Bash(git commit -m 'fix: remove prodigy-core branding — it'\\\\''s just drizz-farm:*)",
       "Bash(rm -f /Users/humblefool2909/drizz-farm/.git/index.lock)",
-      "Bash(git commit -m 'refactor: remove test framework features — farm is infrastructure only:*)"
+      "Bash(git commit -m 'refactor: remove test framework features — farm is infrastructure only:*)",
+      "Bash(sudo npm:*)",
+      "Bash(npx appium:*)"
     ]
   }
 }

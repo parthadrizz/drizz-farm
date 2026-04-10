@@ -14,6 +14,7 @@ import (
 	"github.com/drizz-dev/drizz-farm/internal/config"
 	"github.com/drizz-dev/drizz-farm/internal/pool"
 	"github.com/drizz-dev/drizz-farm/internal/store"
+	"github.com/drizz-dev/drizz-farm/internal/webhook"
 )
 
 var (
@@ -30,6 +31,7 @@ type Broker struct {
 	queue     *Queue
 	cfg       *config.Config
 	store     *store.Store
+	webhook   *webhook.Sender
 	hostIP    string
 	readyCh   chan struct{}
 
@@ -41,10 +43,17 @@ func NewBroker(cfg *config.Config, p *pool.Pool, s *store.Store) *Broker {
 	queueTimeout := time.Duration(cfg.Pool.QueueTimeoutSeconds) * time.Second
 	readyCh := make(chan struct{}, 10) // buffered so notify never blocks
 
+	// Collect webhook URLs
+	var webhookURLs []string
+	for _, wh := range cfg.Webhooks {
+		webhookURLs = append(webhookURLs, wh.URLs...)
+	}
+
 	b := &Broker{
 		sessions: make(map[string]*Session),
 		pool:     p,
 		store:    s,
+		webhook:  webhook.NewSender(webhookURLs),
 		queue:    NewQueue(cfg.Pool.QueueMaxSize, queueTimeout),
 		cfg:      cfg,
 		hostIP:   detectLANIP(),
@@ -140,6 +149,12 @@ func (b *Broker) Release(ctx context.Context, id string) error {
 		b.store.RecordEvent("session_released", sess.InstanceID, sess.ID, fmt.Sprintf("duration=%s", now.Sub(sess.CreatedAt)))
 	}
 
+	// Webhook
+	b.webhook.Send(webhook.Event{
+		Type: "session.released", SessionID: id, InstanceID: sess.InstanceID,
+		Profile: sess.Profile, Duration: now.Sub(sess.CreatedAt).String(),
+	})
+
 	// Release emulator back to pool (triggers snapshot restore)
 	if err := b.pool.Release(ctx, sess.InstanceID); err != nil {
 		log.Error().Err(err).Str("session", id).Msg("broker: pool release failed")
@@ -234,6 +249,12 @@ func (b *Broker) createSessionFromInstance(inst *pool.DeviceInstance, req Create
 		b.store.RecordSession(sess.ID, sess.Profile, sess.Platform, inst.ID, deviceName, conn.ADBSerial, conn.Host, sess.Source, "active", conn.ADBPort, sess.CreatedAt, nil)
 		b.store.RecordEvent("session_created", inst.ID, sess.ID, "profile="+sess.Profile)
 	}
+
+	// Webhook
+	b.webhook.Send(webhook.Event{
+		Type: "session.created", SessionID: sess.ID, InstanceID: inst.ID,
+		Profile: sess.Profile, Serial: sess.Connection.ADBSerial,
+	})
 
 	return sess
 }
