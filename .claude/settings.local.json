@@ -107,7 +107,9 @@
       "Bash(scrcpy --version)",
       "Bash(ffmpeg -version)",
       "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(f'instances: {len\\(d[\\\\\"instances\\\\\"]\\)}, allocated: {d[\\\\\"allocated\\\\\"]}'\\)\")",
-      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); [print\\(f'{i[\\\\\"device_name\\\\\"]} [{i[\\\\\"state\\\\\"]}] serial={i[\\\\\"serial\\\\\"]}'\\) for i in d['instances']]\")"
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); [print\\(f'{i[\\\\\"device_name\\\\\"]} [{i[\\\\\"state\\\\\"]}] serial={i[\\\\\"serial\\\\\"]}'\\) for i in d['instances']]\")",
+      "WebFetch(domain:github.com)",
+      "Bash(ffmpeg -i /tmp/screenrec_raw.bin -c copy -y /tmp/test_video.mp4)"
     ]
   }
 }

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"os/exec"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -20,6 +21,7 @@ var upgrader = websocket.Upgrader{
 type screenHandlers struct {
 	pool *pool.Pool
 	adb  *android.ADBClient
+	sdk  *android.SDK
 }
 
 // StreamScreen handles WS /api/v1/sessions/:id/screen
@@ -61,43 +63,81 @@ func (h *screenHandlers) StreamScreen(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 
-	// Read messages from client (for control: fps, stop, etc.)
 	go func() {
-		for {
-			_, _, err := conn.ReadMessage()
-			if err != nil {
-				cancel()
-				return
-			}
-		}
+		for { _, _, err := conn.ReadMessage(); if err != nil { cancel(); return } }
 	}()
 
-	// Stream screenshots at ~2fps (500ms interval)
-	// Slower but stable — doesn't overwhelm ADB connection
+	// Try H.264 via screenrecord first (30fps, low latency)
+	if h.tryScreenrecord(ctx, conn, serial) {
+		return
+	}
+
+	// Fallback: screencap PNG polling (2fps)
+	log.Info().Str("serial", serial).Msg("screen: using screencap fallback")
+	conn.WriteMessage(websocket.TextMessage, []byte(`{"codec":"png"}`))
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
-
-	capturing := false
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info().Str("serial", serial).Msg("screen: streaming stopped")
 			return
 		case <-ticker.C:
-			if capturing {
-				continue // Skip if previous capture still in-flight
+			png, err := h.adb.Screencap(ctx, serial)
+			if err != nil { continue }
+			if conn.WriteMessage(websocket.BinaryMessage, png) != nil { return }
+		}
+	}
+}
+
+// tryScreenrecord streams H.264 via Android's built-in screenrecord.
+func (h *screenHandlers) tryScreenrecord(ctx context.Context, conn *websocket.Conn, serial string) bool {
+	// Start screenrecord piping raw H.264 to stdout
+	cmd := exec.CommandContext(ctx, h.sdk.ADBPath(), "-s", serial, "shell",
+		"screenrecord", "--output-format=h264", "--size", "480x1066", "--bit-rate", "1000000", "-")
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		log.Debug().Err(err).Msg("screen: screenrecord pipe failed")
+		return false
+	}
+	if err := cmd.Start(); err != nil {
+		log.Debug().Err(err).Msg("screen: screenrecord start failed")
+		return false
+	}
+
+	// Tell browser it's H.264
+	conn.WriteMessage(websocket.TextMessage, []byte(`{"codec":"h264","width":480,"height":1066}`))
+
+	log.Info().Str("serial", serial).Msg("screen: H.264 streaming via screenrecord")
+
+	// Read H.264 and forward to WebSocket
+	// screenrecord outputs Annex B format (00 00 00 01 NAL units)
+	buf := make([]byte, 32768)
+	for {
+		select {
+		case <-ctx.Done():
+			cmd.Process.Kill()
+			return true
+		default:
+		}
+		n, readErr := stdout.Read(buf)
+		if n > 0 {
+			if writeErr := conn.WriteMessage(websocket.BinaryMessage, buf[:n]); writeErr != nil {
+				cmd.Process.Kill()
+				return true
 			}
-			capturing = true
-			go func() {
-				defer func() { capturing = false }()
-				png, err := h.adb.Screencap(ctx, serial)
-				if err != nil {
-					return
-				}
-				if err := conn.WriteMessage(websocket.BinaryMessage, png); err != nil {
-					return
-				}
-			}()
+		}
+		if readErr != nil {
+			// screenrecord has 3-min limit, restart
+			cmd.Process.Kill()
+			cmd.Wait()
+			// Restart
+			cmd = exec.CommandContext(ctx, h.sdk.ADBPath(), "-s", serial, "shell",
+				"screenrecord", "--output-format=h264", "--size", "480x1066", "--bit-rate", "1000000", "-")
+			stdout, err = cmd.StdoutPipe()
+			if err != nil { return true }
+			if err = cmd.Start(); err != nil { return true }
+			log.Debug().Str("serial", serial).Msg("screen: screenrecord restarted (3-min limit)")
 		}
 	}
 }
