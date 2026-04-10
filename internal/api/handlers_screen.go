@@ -72,26 +72,32 @@ func (h *screenHandlers) StreamScreen(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// Stream screenshots at ~5fps (200ms interval)
-	// This is the simple approach; scrcpy-based streaming comes later
-	ticker := time.NewTicker(200 * time.Millisecond)
+	// Stream screenshots at ~2fps (500ms interval)
+	// Slower but stable — doesn't overwhelm ADB connection
+	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 
+	capturing := false
 	for {
 		select {
 		case <-ctx.Done():
 			log.Info().Str("serial", serial).Msg("screen: streaming stopped")
 			return
 		case <-ticker.C:
-			png, err := h.adb.Screencap(ctx, serial)
-			if err != nil {
-				log.Debug().Err(err).Str("serial", serial).Msg("screen: screencap failed")
-				continue
+			if capturing {
+				continue // Skip if previous capture still in-flight
 			}
-			if err := conn.WriteMessage(websocket.BinaryMessage, png); err != nil {
-				log.Debug().Err(err).Msg("screen: write failed")
-				return
-			}
+			capturing = true
+			go func() {
+				defer func() { capturing = false }()
+				png, err := h.adb.Screencap(ctx, serial)
+				if err != nil {
+					return
+				}
+				if err := conn.WriteMessage(websocket.BinaryMessage, png); err != nil {
+					return
+				}
+			}()
 		}
 	}
 }
@@ -132,7 +138,7 @@ func (h *screenHandlers) StreamLogcat(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	// Poll logcat every second, send last 20 lines
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 
 	for {
@@ -140,7 +146,7 @@ func (h *screenHandlers) StreamLogcat(w http.ResponseWriter, r *http.Request) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			output, err := h.adb.Shell(ctx, serial, "logcat -d -t 30 -v brief")
+			output, err := h.adb.Shell(ctx, serial, "logcat -d -t 20 -v brief")
 			if err != nil {
 				continue
 			}
@@ -149,8 +155,6 @@ func (h *screenHandlers) StreamLogcat(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 			}
-			// Clear logcat buffer after reading
-			h.adb.Shell(ctx, serial, "logcat -c")
 		}
 	}
 }
