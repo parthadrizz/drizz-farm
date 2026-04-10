@@ -83,15 +83,68 @@ export function LiveView() {
     }
   }, []);
 
-  const handleCanvasClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+  // Gesture tracking — tap vs swipe
+  const dragStart = useRef<{ x: number; y: number; time: number } | null>(null);
+
+  const canvasCoords = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvas) return { x: 0, y: 0 };
     const rect = canvas.getBoundingClientRect();
     const scaleX = canvas.width / rect.width;
     const scaleY = canvas.height / rect.height;
-    const x = Math.round((e.clientX - rect.left) * scaleX);
-    const y = Math.round((e.clientY - rect.top) * scaleY);
-    sendInput(`tap ${x} ${y}`);
+    return {
+      x: Math.round((e.clientX - rect.left) * scaleX),
+      y: Math.round((e.clientY - rect.top) * scaleY),
+    };
+  }, []);
+
+  const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    const { x, y } = canvasCoords(e);
+    dragStart.current = { x, y, time: Date.now() };
+  }, [canvasCoords]);
+
+  const handleMouseUp = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!dragStart.current) return;
+    const start = dragStart.current;
+    const { x: endX, y: endY } = canvasCoords(e);
+    const dx = endX - start.x;
+    const dy = endY - start.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const duration = Date.now() - start.time;
+    dragStart.current = null;
+
+    if (dist < 15) {
+      // Short distance = tap
+      sendInput(`tap ${endX} ${endY}`);
+    } else {
+      // Swipe — send with duration for speed control
+      const swipeDuration = Math.max(100, Math.min(duration, 1000));
+      sendInput(`swipe ${start.x} ${start.y} ${endX} ${endY} ${swipeDuration}`);
+    }
+  }, [canvasCoords, sendInput]);
+
+  // Keyboard input — forward keystrokes to emulator
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't capture when typing in input fields
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) return;
+
+      e.preventDefault();
+      if (e.key === 'Backspace') { sendInput('key 67'); }
+      else if (e.key === 'Enter') { sendInput('key 66'); }
+      else if (e.key === 'Escape') { sendInput('back'); }
+      else if (e.key === 'Tab') { sendInput('key 61'); }
+      else if (e.key === 'ArrowUp') { sendInput('key 19'); }
+      else if (e.key === 'ArrowDown') { sendInput('key 20'); }
+      else if (e.key === 'ArrowLeft') { sendInput('key 21'); }
+      else if (e.key === 'ArrowRight') { sendInput('key 22'); }
+      else if (e.key.length === 1) {
+        // Regular character — type it
+        sendInput(`text ${e.key}`);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
   }, [sendInput]);
 
   const [adbCmd, setAdbCmd] = useState('');
@@ -121,7 +174,9 @@ export function LiveView() {
               <div className="animate-spin w-5 h-5 border-2 border-gray-600 border-t-emerald-400 rounded-full" />
             </div>
           ) : (
-            <canvas ref={canvasRef} onClick={handleCanvasClick}
+            <canvas ref={canvasRef}
+              onMouseDown={handleMouseDown}
+              onMouseUp={handleMouseUp}
               className="w-[240px] h-[533px] cursor-crosshair rounded" style={{ imageRendering: 'auto' }} />
           )}
         </div>

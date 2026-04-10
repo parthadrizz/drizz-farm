@@ -466,9 +466,9 @@ func (p *Pool) removeInstance(id string) {
 // watchDevice monitors a device. Waits for grace period before health checking.
 func (p *Pool) watchDevice(inst *DeviceInstance) {
 	// Grace period — don't health check during initial boot/snapshot
-	time.Sleep(30 * time.Second)
+	time.Sleep(60 * time.Second)
 
-	ticker := time.NewTicker(time.Duration(p.cfg.HealthCheck.IntervalSeconds) * time.Second)
+	ticker := time.NewTicker(30 * time.Second) // Check every 30s, not 15s
 	defer ticker.Stop()
 
 	for range ticker.C {
@@ -492,12 +492,13 @@ func (p *Pool) watchDevice(inst *DeviceInstance) {
 		if inst.Device != nil {
 			if err := inst.Device.HealthCheck(context.Background()); err != nil {
 				inst.RecordHealthCheck(false)
-				if inst.HealthFails >= p.cfg.HealthCheck.UnhealthyThreshold {
+				// Only kill if unhealthy for 5+ minutes straight
+				if time.Since(inst.LastHealthy) > 5*time.Minute && inst.HealthFails > 0 {
 					log.Warn().
 						Str("instance", inst.ID).
 						Str("device", inst.Device.DisplayName()).
-						Int("fails", inst.HealthFails).
-						Msg("pool: device unhealthy, removing")
+						Dur("unhealthy_for", time.Since(inst.LastHealthy)).
+						Msg("pool: device unhealthy for 5+ minutes, removing")
 					_ = p.destroyInstance(context.Background(), inst)
 					return
 				}
