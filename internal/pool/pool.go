@@ -144,8 +144,7 @@ func (p *Pool) adoptRunningEmulators(ctx context.Context) {
 		inst.RecordHealthCheck(true)
 		inst.TouchActivity()
 
-		// watchDevice disabled — was killing emulators during ADB-heavy operations
-	// go p.watchDevice(inst)
+		go p.watchDevice(inst)
 
 		log.Info().Str("serial", dev.Serial).Str("name", emuDev.DisplayName()).Msg("pool: adopted running emulator")
 	}
@@ -430,8 +429,7 @@ func (p *Pool) bootEmulator(ctx context.Context, avdName string, profileName str
 		Msg("pool: device warm and ready")
 
 	p.notifyReady()
-	// watchDevice disabled — was killing emulators during ADB-heavy operations
-	// go p.watchDevice(inst)
+	go p.watchDevice(inst)
 
 	return inst, nil
 }
@@ -515,22 +513,16 @@ func (p *Pool) removeInstance(id string) {
 
 // --- Device Watching ---
 
-// watchDevice monitors a device. Waits for grace period before health checking.
+// watchDevice checks if device is still visible in ADB. Removes if completely gone.
 func (p *Pool) watchDevice(inst *DeviceInstance) {
-	// Grace period — don't health check during initial boot/snapshot
-	time.Sleep(60 * time.Second)
+	time.Sleep(60 * time.Second) // Grace period
 
-	ticker := time.NewTicker(30 * time.Second) // Check every 30s, not 15s
+	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
 	for range ticker.C {
 		state := inst.GetState()
-		if state == StateDestroying {
-			return
-		}
-
-		// Skip health checks during resetting
-		if state == StateResetting || state == StateBooting {
+		if state == StateDestroying || state == StateResetting || state == StateBooting {
 			continue
 		}
 
@@ -541,17 +533,25 @@ func (p *Pool) watchDevice(inst *DeviceInstance) {
 			return
 		}
 
+		// Only check if device is visible in ADB — don't run heavy commands
 		if inst.Device != nil {
-			if err := inst.Device.HealthCheck(context.Background()); err != nil {
+			serial := inst.Device.Serial()
+			devices, err := p.adb.Devices(context.Background())
+			if err != nil {
+				continue // ADB itself failed, don't kill
+			}
+			found := false
+			for _, d := range devices {
+				if d.Serial == serial && d.State == "device" {
+					found = true
+					break
+				}
+			}
+			if !found {
 				inst.RecordHealthCheck(false)
-				// Only kill if unhealthy for 5+ minutes straight
-				if time.Since(inst.LastHealthy) > 5*time.Minute && inst.HealthFails > 0 {
-					log.Warn().
-						Str("instance", inst.ID).
-						Str("device", inst.Device.DisplayName()).
-						Dur("unhealthy_for", time.Since(inst.LastHealthy)).
-						Msg("pool: device unhealthy for 5+ minutes, removing")
-					_ = p.destroyInstance(context.Background(), inst)
+				if inst.HealthFails >= 3 { // 3 consecutive misses (90s)
+					log.Warn().Str("instance", inst.ID).Str("serial", serial).Msg("pool: device gone from ADB, removing")
+					p.removeInstance(inst.ID)
 					return
 				}
 			} else {
