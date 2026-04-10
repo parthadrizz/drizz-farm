@@ -100,7 +100,8 @@
       "Bash(appium --version)",
       "Bash(appium driver:*)",
       "Bash(make build:*)",
-      "Bash(git commit -m 'fix: unused nodeAddr parameter:*)"
+      "Bash(git commit -m 'fix: unused nodeAddr parameter:*)",
+      "Bash(git commit -m 'fix: input WS connection tracking, debug logging for swipe/keyboard issues:*)"
     ]
   }
 }

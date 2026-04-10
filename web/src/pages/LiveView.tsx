@@ -56,6 +56,7 @@ export function LiveView() {
   }, [id]);
 
   // Input WebSocket
+  const [inputConnected, setInputConnected] = useState(false);
   useEffect(() => {
     if (!id) return;
 
@@ -63,6 +64,9 @@ export function LiveView() {
     const wsUrl = `${proto}//${window.location.host}/api/v1/sessions/${id}/input`;
     const ws = new WebSocket(wsUrl);
     inputWsRef.current = ws;
+    ws.onopen = () => { setInputConnected(true); console.log('input ws connected'); };
+    ws.onerror = (e) => { setInputConnected(false); console.error('input ws error', e); };
+    ws.onclose = () => { setInputConnected(false); };
 
     return () => ws.close();
   }, [id]);
@@ -166,7 +170,7 @@ export function LiveView() {
           <button onClick={() => navigate('/')} className="text-xs text-gray-500 hover:text-gray-300">← Back</button>
           <span className="text-xs font-mono text-purple-400">{instance?.device_name || id}</span>
           <div className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-emerald-400' : 'bg-red-400'}`} />
-          <span className="text-[10px] text-gray-600">{connected ? `${fps} fps` : 'disconnected'}</span>
+          <span className="text-[10px] text-gray-600">{connected ? `${fps} fps` : 'disconnected'}{inputConnected ? '' : ' · no input'}</span>
         </div>
         <div className="bg-gray-900 border border-gray-800 rounded-lg p-1 inline-block">
           {!connected ? (
