@@ -117,7 +117,8 @@
       "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(f'ID={d[\\\\\"id\\\\\"]} inst={d[\\\\\"instance_id\\\\\"]}'\\)\")",
       "Bash(git commit -m 'fix: watchDevice only removes if device gone from ADB \\(not health check failures\\):*)",
       "Bash(grep -l \"webrtc\" /Users/humblefool2909/drizz-farm/internal/api/dashboard/assets/*.js)",
-      "Bash(grep -l \"webrtc\" /Users/humblefool2909/drizz-farm/web/dist/assets/*.js)"
+      "Bash(grep -l \"webrtc\" /Users/humblefool2909/drizz-farm/web/dist/assets/*.js)",
+      "Bash(git commit -m 'fix: always render video+canvas, toggle with CSS hidden — fixes null ref on ontrack:*)"
     ]
   }
 }

@@ -227,14 +227,13 @@ export function LiveView() {
         <div className="bg-gray-900 border border-gray-800 rounded-lg p-1 inline-block">
           {!connected ? (
             <div className="w-[240px] h-[533px] flex items-center justify-center"><div className="animate-spin w-5 h-5 border-2 border-gray-600 border-t-emerald-400 rounded-full" /></div>
-          ) : useWebRTC ? (
+          ) : (<>
             <video ref={videoRef} autoPlay muted playsInline
               onMouseDown={handleMouseDown as any} onMouseUp={handleMouseUp as any} onMouseLeave={handleMouseLeave as any}
-              className="w-[240px] h-[533px] cursor-crosshair rounded select-none bg-black object-cover" />
-          ) : (
+              className={`w-[240px] h-[533px] cursor-crosshair rounded select-none bg-black object-cover ${useWebRTC ? '' : 'hidden'}`} />
             <canvas ref={canvasRef} onMouseDown={handleMouseDown} onMouseUp={handleMouseUp} onMouseLeave={handleMouseLeave}
-              className="w-[240px] h-[533px] cursor-crosshair rounded select-none" style={{ imageRendering: 'auto' }} />
-          )}
+              className={`w-[240px] h-[533px] cursor-crosshair rounded select-none ${useWebRTC ? 'hidden' : ''}`} style={{ imageRendering: 'auto' }} />
+          </>)}
         </div>
         <div className="flex gap-1 mt-2 justify-center flex-wrap">
           <NavBtn onClick={() => sendInput('back')}>◀ Back</NavBtn>
