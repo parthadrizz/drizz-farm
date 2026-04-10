@@ -1,3 +1,5 @@
+// Package session manages the lifecycle of device sessions, including creation,
+// release, timeout enforcement, and request queueing when the pool is exhausted.
 package session
 
 import (
@@ -25,23 +27,24 @@ var (
 	ErrSessionNotActive = errors.New("session is not active")
 )
 
-// Broker manages session lifecycle.
+// Broker manages session lifecycle — allocation, release, timeout enforcement,
+// and request queueing when the device pool is exhausted.
 type Broker struct {
-	mu       sync.RWMutex
-	sessions map[string]*Session
+	mu       sync.RWMutex       // protects sessions map
+	sessions map[string]*Session // all sessions keyed by session ID
 
-	nodeName   string
-	pool       *pool.Pool
-	queue      *Queue
-	cfg        *config.Config
-	store      *store.Store
-	webhook    *webhook.Sender
-	appium     *appium.Manager
-	federation *federation.Registry
-	hostIP     string
-	readyCh    chan struct{}
+	nodeName   string              // identity of this node in the federation
+	pool       *pool.Pool          // local device/emulator pool
+	queue      *Queue              // waiting requests when pool is exhausted
+	cfg        *config.Config      // server configuration
+	store      *store.Store        // SQLite persistence layer
+	webhook    *webhook.Sender     // outbound webhook dispatcher
+	appium     *appium.Manager     // manages per-session Appium servers
+	federation *federation.Registry // federation peer registry for remote sessions
+	hostIP     string              // detected LAN IP used in connection info
+	readyCh    chan struct{}        // signaled by pool when an emulator becomes warm
 
-	cancel context.CancelFunc
+	cancel context.CancelFunc // cancels background goroutines
 }
 
 // NewBroker creates a new session broker.
@@ -320,6 +323,8 @@ func (b *Broker) QueueDepth() int {
 	return b.queue.Depth()
 }
 
+// createSessionFromInstance builds a new Session from a locally allocated DeviceInstance,
+// persists it to SQLite, starts an Appium server, and fires a webhook notification.
 func (b *Broker) createSessionFromInstance(inst *pool.DeviceInstance, req CreateSessionRequest) *Session {
 	sessionID := uuid.New().String()[:12]
 
@@ -417,6 +422,8 @@ func (b *Broker) timeoutLoop(ctx context.Context) {
 	}
 }
 
+// enforceTimeouts scans all active sessions and releases any that have exceeded
+// their expiry time, persisting the timed-out state to SQLite.
 func (b *Broker) enforceTimeouts(ctx context.Context) {
 	b.mu.RLock()
 	var expired []string
@@ -468,6 +475,9 @@ func (b *Broker) queueDrainLoop(ctx context.Context) {
 	}
 }
 
+// tryDrainQueue dequeues the next waiting request and attempts to allocate a device
+// for it. If the pool is still exhausted the entry is pushed back. On success it
+// recurses to drain additional entries while capacity remains.
 func (b *Broker) tryDrainQueue(ctx context.Context) {
 	if b.queue.Depth() == 0 {
 		return
@@ -498,6 +508,8 @@ func (b *Broker) tryDrainQueue(ctx context.Context) {
 	b.tryDrainQueue(ctx)
 }
 
+// buildConnectionInfo extracts host, ADB, and console connection details from a
+// DeviceInstance into a ConnectionInfo struct suitable for returning to clients.
 func (b *Broker) buildConnectionInfo(inst *pool.DeviceInstance) ConnectionInfo {
 	if inst.Device == nil {
 		return ConnectionInfo{Host: b.hostIP}

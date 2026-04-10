@@ -1,3 +1,8 @@
+// Package pool manages a fleet of Android emulators and physical devices,
+// providing on-demand boot, session allocation via semaphore-based concurrency
+// control, idle cleanup, and health monitoring. Devices are abstracted behind
+// the Device interface so emulators, USB phones, and (future) iOS simulators
+// share the same lifecycle.
 package pool
 
 import (
@@ -89,6 +94,8 @@ func (p *Pool) RegisterScanner(s DeviceScanner) {
 	p.scanners = append(p.scanners, s)
 }
 
+// notifyReady signals the broker that a device has transitioned to warm state,
+// triggering queue drain for any waiting session requests.
 func (p *Pool) notifyReady() {
 	if p.onReady != nil {
 		go p.onReady()
@@ -532,6 +539,8 @@ func (p *Pool) createInstance(dev Device, profileName string) *DeviceInstance {
 
 // --- Lifecycle ---
 
+// destroyInstance shuts down a device (kills emulator, cleans up scrcpy/screenrecord),
+// removes it from the pool, and releases its semaphore slot.
 func (p *Pool) destroyInstance(ctx context.Context, inst *DeviceInstance) error {
 	_ = inst.TransitionTo(StateDestroying)
 
@@ -553,6 +562,7 @@ func (p *Pool) destroyInstance(ctx context.Context, inst *DeviceInstance) error 
 	return nil
 }
 
+// removeInstance deletes an instance from the pool's instances map by ID.
 func (p *Pool) removeInstance(id string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -611,6 +621,8 @@ func (p *Pool) watchDevice(inst *DeviceInstance) {
 
 // --- Maintenance ---
 
+// maintenanceLoop runs runMaintenance every 10 seconds until the context is
+// cancelled. It handles USB discovery, error cleanup, and idle shutdown.
 func (p *Pool) maintenanceLoop(ctx context.Context) {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
@@ -625,6 +637,9 @@ func (p *Pool) maintenanceLoop(ctx context.Context) {
 	}
 }
 
+// runMaintenance performs a single maintenance pass: scans for new USB devices,
+// prunes disconnected ones, destroys errored instances, and shuts down devices
+// that have been idle longer than the configured timeout.
 func (p *Pool) runMaintenance(ctx context.Context) {
 	// 1. Scan for USB devices
 	for _, scanner := range p.scanners {
@@ -713,6 +728,7 @@ func (p *Pool) pruneDisconnected(ctx context.Context, currentDevices []Device) {
 
 // --- Helpers ---
 
+// totalInstances returns the current number of tracked instances across all states.
 func (p *Pool) totalInstances() int {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -725,6 +741,9 @@ func (p *Pool) findUnbootedAVD(ctx context.Context) (string, error) {
 	return p.findUnbootedAVDExcluding(ctx, nil)
 }
 
+// findUnbootedAVDExcluding returns the name of an AVD that is neither running
+// in the pool nor present in the exclude set. Returns ("", nil) when every AVD
+// is occupied. Caller must NOT hold p.mu.
 func (p *Pool) findUnbootedAVDExcluding(ctx context.Context, exclude map[string]bool) (string, error) {
 	allAVDs, err := p.avdMgr.List(ctx)
 	if err != nil {
@@ -752,6 +771,9 @@ func (p *Pool) findUnbootedAVDExcluding(ctx context.Context, exclude map[string]
 	return "", nil
 }
 
+// guessProfileForAVD attempts to match an AVD name to a configured profile by
+// checking for a "drizz_{profileName}_" prefix. If no prefix matches it falls
+// back to the first available profile, or "" if none are configured.
 func guessProfileForAVD(avdName string, cfg *config.Config) string {
 	for profileName := range cfg.Pool.Profiles.Android {
 		prefix := "drizz_" + profileName + "_"

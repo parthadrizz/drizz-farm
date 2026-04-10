@@ -35,6 +35,7 @@ type activeRecording struct {
 	startedAt time.Time
 }
 
+// newRecordingHandlers creates handlers for video recording, screenshots, logcat, and HAR capture.
 func newRecordingHandlers(p *pool.Pool, adb *android.ADBClient, sdk *android.SDK, dataDir string) *recordingHandlers {
 	return &recordingHandlers{
 		pool:       p,
@@ -45,6 +46,7 @@ func newRecordingHandlers(p *pool.Pool, adb *android.ADBClient, sdk *android.SDK
 	}
 }
 
+// findSerial resolves a session/instance ID to (serial, instanceID) for recording commands.
 func (h *recordingHandlers) findSerial(id string) (string, string) {
 	if h.pool == nil { return "", "" }
 	for _, inst := range h.pool.Status().Instances {

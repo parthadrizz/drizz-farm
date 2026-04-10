@@ -18,6 +18,7 @@ type deviceHandlers struct {
 	adb  *android.ADBClient
 }
 
+// findSerial resolves a session/instance ID to an ADB serial number for device commands.
 func (h *deviceHandlers) findSerial(id string) string {
 	if h.pool == nil { return "" }
 	for _, inst := range h.pool.Status().Instances {

@@ -46,6 +46,7 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
+// migrate creates tables and runs schema migrations (e.g. adding node_name column).
 func (s *Store) migrate() error {
 	_, err := s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS sessions (
@@ -132,6 +133,7 @@ type SessionRecord struct {
 	DurationSeconds int     `json:"duration_seconds"`
 }
 
+// SessionHistory returns the most recent sessions from SQLite, ordered by creation time.
 func (s *Store) SessionHistory(limit int) ([]SessionRecord, error) {
 	rows, err := s.db.Query(`
 		SELECT id, node_name, profile, platform, device_name, serial, source, state, created_at, released_at, duration_seconds
@@ -154,6 +156,7 @@ func (s *Store) SessionHistory(limit int) ([]SessionRecord, error) {
 
 // --- AVD History ---
 
+// RecordAVDCreation saves an AVD creation event to history.
 func (s *Store) RecordAVDCreation(avdName, profileName, device, systemImage string) error {
 	_, err := s.db.Exec(`INSERT INTO avd_history (avd_name, profile_name, device, system_image) VALUES (?, ?, ?, ?)`,
 		avdName, profileName, device, systemImage)
@@ -162,6 +165,7 @@ func (s *Store) RecordAVDCreation(avdName, profileName, device, systemImage stri
 
 // --- Events ---
 
+// RecordEvent logs a timestamped event (e.g. session_created, device_booted) to SQLite.
 func (s *Store) RecordEvent(eventType, instanceID, sessionID, detail string) error {
 	_, err := s.db.Exec(`INSERT INTO events (event_type, instance_id, session_id, detail) VALUES (?, ?, ?, ?)`,
 		eventType, instanceID, sessionID, detail)
@@ -177,6 +181,7 @@ type EventRecord struct {
 	CreatedAt string `json:"created_at"`
 }
 
+// RecentEvents returns the most recent events from the events log.
 func (s *Store) RecentEvents(limit int) ([]EventRecord, error) {
 	rows, err := s.db.Query(`
 		SELECT id, event_type, COALESCE(instance_id,''), COALESCE(session_id,''), COALESCE(detail,''), created_at

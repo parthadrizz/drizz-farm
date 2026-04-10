@@ -149,6 +149,7 @@ type InvalidTransitionError struct {
 	InstanceID string
 }
 
+// Error returns a human-readable description of the invalid state transition.
 func (e *InvalidTransitionError) Error() string {
 	return "invalid state transition for instance " + e.InstanceID + ": " + e.From.String() + " → " + e.To.String()
 }

@@ -24,6 +24,7 @@ var stateNames = map[SessionState]string{
 	SessionErrored:  "errored",
 }
 
+// String returns the lowercase string representation of a SessionState.
 func (s SessionState) String() string {
 	if name, ok := stateNames[s]; ok {
 		return name

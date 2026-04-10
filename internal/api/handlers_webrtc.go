@@ -34,6 +34,9 @@ type webrtcHandlers struct {
 	mu   sync.Mutex
 }
 
+// Offer handles POST /api/v1/sessions/:id/webrtc/offer — WebRTC SDP exchange.
+// Accepts a browser's SDP offer, creates a Pion PeerConnection with H.264 video,
+// starts scrcpy (or screenrecord fallback) streaming, and returns the SDP answer.
 func (h *webrtcHandlers) Offer(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	serial := h.findSerial(id)
@@ -175,6 +178,8 @@ func (h *webrtcHandlers) Offer(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// streamH264 starts the H.264 capture pipeline (scrcpy first, screenrecord fallback)
+// and feeds NAL units into the WebRTC track. Retries scrcpy on crash/timeout.
 func (h *webrtcHandlers) streamH264(ctx context.Context, cancel context.CancelFunc, track *webrtc.TrackLocalStaticSample, serial string, pliCh <-chan struct{}, connectedCh <-chan struct{}) {
 	defer cancel()
 
@@ -555,6 +560,7 @@ func (h *webrtcHandlers) readAndSendNALs(ctx context.Context, reader io.Reader, 
 	}
 }
 
+// findSerial resolves a session/instance ID to an ADB serial number.
 func (h *webrtcHandlers) findSerial(id string) string {
 	if h.pool == nil {
 		return ""

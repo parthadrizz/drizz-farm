@@ -17,25 +17,40 @@ import (
 
 // Peer represents a discovered drizz-farm node.
 type Peer struct {
-	Name      string    `json:"name"`
-	Host      string    `json:"host"`
-	Port      int       `json:"port"`
-	Capacity  int       `json:"capacity"`
-	Warm      int       `json:"warm"`
-	Allocated int       `json:"allocated"`
-	Available int       `json:"available"`
-	NumCPU    int       `json:"num_cpu"`
-	MemoryMB  int       `json:"memory_mb"`
-	Healthy   bool      `json:"healthy"`
-	LastSeen  time.Time `json:"last_seen"`
+	// Name is the human-readable node name.
+	Name string `json:"name"`
+	// Host is the IP or hostname of the peer.
+	Host string `json:"host"`
+	// Port is the HTTP API port of the peer.
+	Port int `json:"port"`
+	// Capacity is the maximum number of emulator instances the peer can run.
+	Capacity int `json:"capacity"`
+	// Warm is the number of pre-booted idle instances on the peer.
+	Warm int `json:"warm"`
+	// Allocated is the number of instances currently assigned to sessions.
+	Allocated int `json:"allocated"`
+	// Available is the number of additional instances the peer can accept.
+	Available int `json:"available"`
+	// NumCPU is the number of CPU cores on the peer machine.
+	NumCPU int `json:"num_cpu"`
+	// MemoryMB is the total system memory in megabytes.
+	MemoryMB int `json:"memory_mb"`
+	// Healthy indicates whether the peer responded to the last health check.
+	Healthy bool `json:"healthy"`
+	// LastSeen is the timestamp of the last successful health check.
+	LastSeen time.Time `json:"last_seen"`
 }
 
-// PeerPool is the pool status from a remote peer.
+// PeerPool is the pool status returned by a remote peer's /api/v1/pool endpoint.
 type PeerPool struct {
+	// TotalCapacity is the maximum number of emulator instances the peer supports.
 	TotalCapacity int `json:"total_capacity"`
-	Warm          int `json:"warm"`
-	Allocated     int `json:"allocated"`
-	Booting       int `json:"booting"`
+	// Warm is the count of pre-booted idle instances.
+	Warm int `json:"warm"`
+	// Allocated is the count of instances currently in use by sessions.
+	Allocated int `json:"allocated"`
+	// Booting is the count of instances currently starting up.
+	Booting int `json:"booting"`
 }
 
 // Registry tracks all known peers in the cluster.
@@ -447,6 +462,7 @@ func (r *Registry) GetFederatedStatus() map[string]any {
 
 // --- HTTP helpers ---
 
+// remoteGet performs an HTTP GET to the given path on nodeAddr and returns the response body.
 func (r *Registry) remoteGet(nodeAddr, path string) ([]byte, error) {
 	resp, err := r.client.Get(fmt.Sprintf("http://%s%s", nodeAddr, path))
 	if err != nil {
@@ -456,6 +472,7 @@ func (r *Registry) remoteGet(nodeAddr, path string) ([]byte, error) {
 	return io.ReadAll(resp.Body)
 }
 
+// remotePost performs an HTTP POST with a JSON body to the given path on nodeAddr and returns the response body.
 func (r *Registry) remotePost(nodeAddr, path, body string) ([]byte, error) {
 	resp, err := r.client.Post(fmt.Sprintf("http://%s%s", nodeAddr, path), "application/json", strings.NewReader(body))
 	if err != nil {
