@@ -87,17 +87,67 @@ func (p *Pool) notifyReady() {
 	}
 }
 
-// Start initializes the pool — boots nothing, devices start on-demand.
+// Start initializes the pool — adopts already-running emulators, then monitors.
 func (p *Pool) Start(ctx context.Context) error {
 	ctx, p.cancel = context.WithCancel(ctx)
+
+	// Adopt any already-running emulators (from previous sessions or manual starts)
+	p.adoptRunningEmulators(ctx)
 
 	log.Info().
 		Int("max_concurrent", p.cfg.Pool.MaxConcurrent).
 		Int("scanners", len(p.scanners)).
+		Int("adopted", len(p.instances)).
 		Msg("pool: ready (devices boot on-demand)")
 
 	go p.maintenanceLoop(ctx)
 	return nil
+}
+
+// adoptRunningEmulators scans ADB for already-running devices and adds them to the pool.
+func (p *Pool) adoptRunningEmulators(ctx context.Context) {
+	devices, err := p.adb.Devices(ctx)
+	if err != nil {
+		return
+	}
+
+	for _, dev := range devices {
+		if dev.State != "device" {
+			continue
+		}
+
+		// Check if already in pool
+		alreadyTracked := false
+		p.mu.RLock()
+		for _, inst := range p.instances {
+			if inst.Device != nil && inst.Device.Serial() == dev.Serial {
+				alreadyTracked = true
+				break
+			}
+		}
+		p.mu.RUnlock()
+		if alreadyTracked {
+			continue
+		}
+
+		// Create a lightweight device wrapper for this running emulator
+		emuDev := android.NewRunningEmulatorDevice(dev.Serial, p.adb)
+		if err := emuDev.Prepare(ctx); err != nil {
+			continue
+		}
+
+		inst := p.createInstance(emuDev, "")
+		if err := inst.TransitionTo(StateWarm); err != nil {
+			p.removeInstance(inst.ID)
+			continue
+		}
+		inst.RecordHealthCheck(true)
+		inst.TouchActivity()
+
+		go p.watchDevice(inst)
+
+		log.Info().Str("serial", dev.Serial).Str("name", emuDev.DisplayName()).Msg("pool: adopted running emulator")
+	}
 }
 
 // Stop gracefully shuts down all managed devices.
