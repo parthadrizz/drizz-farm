@@ -28,12 +28,32 @@ func NewAVDManager(sdk *SDK, runner CommandRunner) *AVDManager {
 }
 
 // Create creates a new AVD with the given name and profile settings.
+// If profile.SystemImage or profile.Device are empty, they are auto-detected
+// from the installed SDK images (picks the newest arm64 image and "pixel" device).
 func (m *AVDManager) Create(ctx context.Context, name string, profile config.AndroidProfile) error {
+	systemImage := profile.SystemImage
+	device := profile.Device
+
+	// Auto-detect system image if not specified
+	if systemImage == "" {
+		images, err := m.sdk.ListInstalledSystemImages(ctx, m.runner)
+		if err != nil || len(images) == 0 {
+			return fmt.Errorf("no system images installed — run 'sdkmanager' to install one")
+		}
+		// Pick the first available (sorted by API level desc in ListInstalledSystemImages)
+		systemImage = images[0].Path
+	}
+
+	// Default device if not specified
+	if device == "" {
+		device = "pixel"
+	}
+
 	args := []string{
 		"create", "avd",
 		"--name", name,
-		"--package", profile.SystemImage,
-		"--device", profile.Device,
+		"--package", systemImage,
+		"--device", device,
 		"--force",
 	}
 

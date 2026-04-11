@@ -141,6 +141,26 @@ func RegisterRoutes(r chi.Router, cfg *config.Config, p *pool.Pool, b *session.B
 
 		// Federation — manage all nodes from orchestrator
 		r.Route("/federation", func(r chi.Router) {
+			// Handshake — peer sends cluster key, we verify before accepting
+			r.Post("/handshake", func(w http.ResponseWriter, r *http.Request) {
+				if deps.Federation == nil {
+					JSON(w, 200, map[string]string{"status": "ok"})
+					return
+				}
+				var req struct {
+					ClusterKey string `json:"cluster_key"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+					JSON(w, 400, ErrorResponse{Error: "invalid", Message: "bad request", Code: 400})
+					return
+				}
+				if !deps.Federation.VerifyHandshake(req.ClusterKey) {
+					JSON(w, 403, ErrorResponse{Error: "forbidden", Message: "invalid cluster key", Code: 403})
+					return
+				}
+				JSON(w, 200, map[string]string{"status": "ok"})
+			})
+
 			r.Get("/peers", func(w http.ResponseWriter, r *http.Request) {
 				if deps.Federation == nil {
 					JSON(w, 200, map[string]any{"peers": []any{}, "count": 0})

@@ -126,7 +126,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 	}
 
 	// Federation registry
-	fedRegistry := federation.NewRegistry(getLANIP(), cfg.API.Port)
+	fedRegistry := federation.NewRegistry(getLANIP(), cfg.API.Port, cfg.Cluster.Key)
 	fedRegistry.UpdateSelf(cfg.Node.Name, cfg.Pool.MaxConcurrent, cfg.Pool.MaxConcurrent, runtime.NumCPU(), int(getSystemMemoryMB()))
 	fedRegistry.SetSelfUpdateFn(func() {
 		status := emulatorPool.Status()
@@ -163,6 +163,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 			Port:          cfg.API.Port,
 			Version:       buildinfo.Version,
 			Tier:          string(lic.Current().Tier),
+			Environment:   cfg.Cluster.Environment,
 			TotalCapacity: cfg.Pool.MaxConcurrent,
 		})
 		if err != nil {
@@ -174,7 +175,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 	if cfg.Network.MDNS.Enabled {
 		go func() {
 			time.Sleep(3 * time.Second) // Wait for own mDNS to settle
-			nodes, err := discovery.Browse(ctx, 5*time.Second)
+			nodes, err := discovery.BrowseEnv(ctx, 5*time.Second, cfg.Cluster.Environment)
 			if err == nil {
 				for _, n := range nodes {
 					fedRegistry.AddPeer(n.Name, n.Host, n.Port)
@@ -191,7 +192,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
-					nodes, err := discovery.Browse(ctx, 3*time.Second)
+					nodes, err := discovery.BrowseEnv(ctx, 3*time.Second, cfg.Cluster.Environment)
 					if err == nil {
 						for _, n := range nodes {
 							fedRegistry.AddPeer(n.Name, n.Host, n.Port)

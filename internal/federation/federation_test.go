@@ -17,7 +17,7 @@ import (
 
 func TestSingleNode_BecomesLeader(t *testing.T) {
 	// Node A boots alone — no peers. Should be leader.
-	reg := NewRegistry("10.0.0.1", 9401)
+	reg := NewRegistry("10.0.0.1", 9401, "")
 	reg.UpdateSelf("MacMini-A", 3, 3, 10, 16000)
 
 	if !reg.IsLeader() {
@@ -31,7 +31,7 @@ func TestSingleNode_BecomesLeader(t *testing.T) {
 func TestTwoNodes_HigherScoreLeads(t *testing.T) {
 	// Node A (10 CPU, 16GB) vs Node B (4 CPU, 8GB).
 	// A should lead because higher score.
-	reg := NewRegistry("10.0.0.1", 9401)
+	reg := NewRegistry("10.0.0.1", 9401, "")
 	reg.UpdateSelf("MacMini-A", 3, 3, 10, 16000) // score = 3*10 + 10*5 + 16*3 + 3*2 = 30+50+48+6 = 134
 
 	reg.AddPeer("MacMini-B", "10.0.0.2", 9401)
@@ -67,7 +67,7 @@ func TestTwoNodes_HigherScoreLeads(t *testing.T) {
 
 func TestThreeNodes_LeaderElection(t *testing.T) {
 	// Three Mac Minis boot up. The one with the highest score leads.
-	reg := NewRegistry("10.0.0.1", 9401)
+	reg := NewRegistry("10.0.0.1", 9401, "")
 	reg.UpdateSelf("MacMini-A", 3, 3, 8, 16000) // score = 30+40+48+6 = 124
 
 	// B: weaker
@@ -119,7 +119,7 @@ func TestThreeNodes_LeaderElection(t *testing.T) {
 
 func TestTiebreaker_LowestHostWins(t *testing.T) {
 	// Same score — lowest host:port should win.
-	reg := NewRegistry("10.0.0.2", 9401) // self = 10.0.0.2:9401
+	reg := NewRegistry("10.0.0.2", 9401, "") // self = 10.0.0.2:9401
 	reg.UpdateSelf("MacMini-B", 3, 3, 8, 16000) // score = 124
 
 	reg.AddPeer("MacMini-A", "10.0.0.1", 9401) // lower host
@@ -144,7 +144,7 @@ func TestTiebreaker_LowestHostWins(t *testing.T) {
 
 func TestLeaderFailover_PeerDies(t *testing.T) {
 	// C is leader. C goes unhealthy. A should become leader.
-	reg := NewRegistry("10.0.0.1", 9401)
+	reg := NewRegistry("10.0.0.1", 9401, "")
 	reg.UpdateSelf("MacMini-A", 3, 3, 8, 16000) // score 124
 
 	reg.AddPeer("MacMini-C", "10.0.0.3", 9401)
@@ -177,7 +177,7 @@ func TestLeaderFailover_PeerDies(t *testing.T) {
 
 func TestLeaderFailover_PeerPruned(t *testing.T) {
 	// Simulate the stale peer pruning that happens in StartRefreshLoop.
-	reg := NewRegistry("10.0.0.1", 9401)
+	reg := NewRegistry("10.0.0.1", 9401, "")
 	reg.UpdateSelf("MacMini-A", 3, 3, 8, 16000)
 
 	reg.AddPeer("MacMini-C", "10.0.0.3", 9401)
@@ -210,7 +210,7 @@ func TestLeaderFailover_PeerPruned(t *testing.T) {
 
 func TestLeaderReElection_ScoreChanges(t *testing.T) {
 	// A starts as leader. B's capacity increases (devices freed). B becomes leader.
-	reg := NewRegistry("10.0.0.1", 9401)
+	reg := NewRegistry("10.0.0.1", 9401, "")
 	reg.UpdateSelf("MacMini-A", 3, 1, 8, 16000) // only 1 available → score = 10+40+48+6 = 104
 
 	reg.AddPeer("MacMini-B", "10.0.0.2", 9401)
@@ -312,7 +312,7 @@ func TestPoolSemaphore_ConcurrentAccess(t *testing.T) {
 // --- Federation Remote Session Routing ---
 
 func TestFederationRouting_PeerWithCapacity(t *testing.T) {
-	reg := NewRegistry("10.0.0.1", 9401)
+	reg := NewRegistry("10.0.0.1", 9401, "")
 
 	// Add peer with capacity
 	reg.AddPeer("MacMini-B", "10.0.0.2", 9401)
@@ -333,7 +333,7 @@ func TestFederationRouting_PeerWithCapacity(t *testing.T) {
 }
 
 func TestFederationRouting_NoPeerCapacity(t *testing.T) {
-	reg := NewRegistry("10.0.0.1", 9401)
+	reg := NewRegistry("10.0.0.1", 9401, "")
 
 	// Peer exists but no capacity
 	reg.AddPeer("MacMini-B", "10.0.0.2", 9401)
@@ -349,7 +349,7 @@ func TestFederationRouting_NoPeerCapacity(t *testing.T) {
 }
 
 func TestFederationRouting_UnhealthyPeerSkipped(t *testing.T) {
-	reg := NewRegistry("10.0.0.1", 9401)
+	reg := NewRegistry("10.0.0.1", 9401, "")
 
 	reg.AddPeer("MacMini-B", "10.0.0.2", 9401)
 	reg.mu.Lock()
@@ -364,7 +364,7 @@ func TestFederationRouting_UnhealthyPeerSkipped(t *testing.T) {
 }
 
 func TestFederationRouting_BestPeerSelected(t *testing.T) {
-	reg := NewRegistry("10.0.0.1", 9401)
+	reg := NewRegistry("10.0.0.1", 9401, "")
 
 	reg.AddPeer("MacMini-B", "10.0.0.2", 9401)
 	reg.AddPeer("MacMini-C", "10.0.0.3", 9401)
@@ -444,7 +444,7 @@ func TestCreateRemoteSession_Success(t *testing.T) {
 	port := 0
 	fmt.Sscanf(parts[1], "%d", &port)
 
-	reg := NewRegistry("10.0.0.1", 9401)
+	reg := NewRegistry("10.0.0.1", 9401, "")
 	reg.AddPeer("MockPeer", host, port)
 
 	peer := &Peer{Name: "MockPeer", Host: host, Port: port, Healthy: true, Available: 2}
@@ -468,7 +468,7 @@ func TestReleaseRemoteSession_Success(t *testing.T) {
 	defer srv.Close()
 
 	addr := strings.TrimPrefix(srv.URL, "http://")
-	reg := NewRegistry("10.0.0.1", 9401)
+	reg := NewRegistry("10.0.0.1", 9401, "")
 	err := reg.ReleaseRemoteSession(addr, "remote-sess-123")
 	if err != nil {
 		t.Fatalf("ReleaseRemoteSession failed: %v", err)
@@ -493,7 +493,7 @@ func TestRefreshPeers_UpdatesCapacity(t *testing.T) {
 	port := 0
 	fmt.Sscanf(parts[1], "%d", &port)
 
-	reg := NewRegistry("10.0.0.1", 9401)
+	reg := NewRegistry("10.0.0.1", 9401, "")
 	reg.AddPeer("MockPeer", host, port)
 
 	reg.RefreshPeers(context.Background())
@@ -530,7 +530,7 @@ func TestRefreshPeers_MarksUnhealthyOnFailure(t *testing.T) {
 	port := 0
 	fmt.Sscanf(parts[1], "%d", &port)
 
-	reg := NewRegistry("10.0.0.1", 9401)
+	reg := NewRegistry("10.0.0.1", 9401, "")
 	reg.AddPeer("DeadPeer", host, port)
 	reg.mu.Lock()
 	reg.peers[addr] = &Peer{Name: "DeadPeer", Host: host, Port: port, Healthy: true, LastSeen: time.Now()}
@@ -554,7 +554,7 @@ func TestClusterLifecycle_BootSequence(t *testing.T) {
 	// Simulates: A boots → leader. B boots → A still leads. C boots → C leads.
 	// C dies → A leads again.
 
-	reg := NewRegistry("10.0.0.1", 9401)
+	reg := NewRegistry("10.0.0.1", 9401, "")
 
 	// Step 1: A boots alone
 	reg.UpdateSelf("MacMini-A", 3, 3, 8, 16000) // score 124
@@ -645,7 +645,7 @@ func TestClusterLifecycle_BootSequence(t *testing.T) {
 // --- Federated Status Output ---
 
 func TestFederatedStatus_IncludesAllNodes(t *testing.T) {
-	reg := NewRegistry("10.0.0.1", 9401)
+	reg := NewRegistry("10.0.0.1", 9401, "")
 	reg.UpdateSelf("MacMini-A", 3, 2, 8, 16000)
 
 	reg.AddPeer("MacMini-B", "10.0.0.2", 9401)
@@ -710,5 +710,86 @@ func TestLeaderScore_ZeroValues(t *testing.T) {
 	score := leaderScore(p)
 	if score != 0 {
 		t.Errorf("empty peer should have score 0, got %d", score)
+	}
+}
+
+// --- Cluster Auth Tests ---
+
+func TestHandshake_CorrectKey(t *testing.T) {
+	reg := NewRegistry("10.0.0.1", 9401, "my-secret-key")
+	if !reg.VerifyHandshake("my-secret-key") {
+		t.Error("correct key should pass handshake")
+	}
+}
+
+func TestHandshake_WrongKey(t *testing.T) {
+	reg := NewRegistry("10.0.0.1", 9401, "my-secret-key")
+	if reg.VerifyHandshake("wrong-key") {
+		t.Error("wrong key should fail handshake")
+	}
+}
+
+func TestHandshake_EmptyKey(t *testing.T) {
+	reg := NewRegistry("10.0.0.1", 9401, "")
+	// Empty cluster key = no auth required
+	if reg.VerifyHandshake("anything") {
+		t.Error("empty cluster key means auth is disabled, VerifyHandshake should return false")
+	}
+}
+
+func TestAddPeer_WithAuth(t *testing.T) {
+	// Start a mock peer that accepts handshakes with the right key
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/federation/handshake", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ClusterKey string `json:"cluster_key"`
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+		if req.ClusterKey == "shared-secret" {
+			w.WriteHeader(200)
+			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		} else {
+			w.WriteHeader(403)
+			json.NewEncoder(w).Encode(map[string]string{"error": "forbidden"})
+		}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	addr := strings.TrimPrefix(srv.URL, "http://")
+	parts := strings.SplitN(addr, ":", 2)
+	host := parts[0]
+	port := 0
+	fmt.Sscanf(parts[1], "%d", &port)
+
+	// Registry with correct key — should accept peer
+	reg := NewRegistry("10.0.0.1", 9401, "shared-secret")
+	reg.AddPeer("GoodPeer", host, port)
+
+	if reg.PeerCount() != 1 {
+		t.Errorf("peer with correct key should be accepted, got %d peers", reg.PeerCount())
+	}
+}
+
+func TestAddPeer_WrongKey_Rejected(t *testing.T) {
+	// Mock peer that only accepts "correct-key"
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/federation/handshake", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(403)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	addr := strings.TrimPrefix(srv.URL, "http://")
+	parts := strings.SplitN(addr, ":", 2)
+	host := parts[0]
+	port := 0
+	fmt.Sscanf(parts[1], "%d", &port)
+
+	reg := NewRegistry("10.0.0.1", 9401, "wrong-key")
+	reg.AddPeer("BadPeer", host, port)
+
+	if reg.PeerCount() != 0 {
+		t.Errorf("peer with wrong key should be rejected, got %d peers", reg.PeerCount())
 	}
 }

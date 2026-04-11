@@ -11,6 +11,7 @@ import (
 // Config is the root configuration for drizz-farm.
 type Config struct {
 	Node        NodeConfig        `yaml:"node"        mapstructure:"node"`
+	Cluster     ClusterConfig     `yaml:"cluster"     mapstructure:"cluster"`
 	Pool        PoolConfig        `yaml:"pool"        mapstructure:"pool"`
 	API         APIConfig         `yaml:"api"         mapstructure:"api"`
 	Network     NetworkConfig     `yaml:"network"     mapstructure:"network"`
@@ -19,6 +20,13 @@ type Config struct {
 	Artifacts   ArtifactsConfig   `yaml:"artifacts"   mapstructure:"artifacts"`
 	Webhooks    []WebhookConfig    `yaml:"webhooks"    mapstructure:"webhooks"`
 	License     LicenseConfig     `yaml:"license"     mapstructure:"license"`
+}
+
+// ClusterConfig controls multi-node federation security.
+// Nodes only federate with peers that share the same key and environment.
+type ClusterConfig struct {
+	Key         string `yaml:"key"         mapstructure:"key"`         // shared secret for peer auth
+	Environment string `yaml:"environment" mapstructure:"environment"` // prod, staging, dev
 }
 
 type NodeConfig struct {
@@ -51,9 +59,12 @@ type ProfilesConfig struct {
 	IOS     map[string]IOSProfile     `yaml:"ios"     mapstructure:"ios"`
 }
 
+// AndroidProfile defines hardware specs for emulators. Device and SystemImage
+// are optional — if empty, drizz-farm auto-detects from installed SDK images
+// during AVD creation. The remaining fields control emulator resource allocation.
 type AndroidProfile struct {
-	Device              string `yaml:"device"                mapstructure:"device"`
-	SystemImage         string `yaml:"system_image"          mapstructure:"system_image"`
+	Device              string `yaml:"device,omitempty"                mapstructure:"device"`
+	SystemImage         string `yaml:"system_image,omitempty"          mapstructure:"system_image"`
 	RAMMB               int    `yaml:"ram_mb"                mapstructure:"ram_mb"`
 	HeapMB              int    `yaml:"heap_mb"               mapstructure:"heap_mb"`
 	DiskSizeMB          int    `yaml:"disk_size_mb"          mapstructure:"disk_size_mb"`
@@ -143,14 +154,8 @@ func (c *Config) Validate() error {
 	if len(c.Pool.Profiles.Android) == 0 && len(c.Pool.Profiles.IOS) == 0 {
 		return fmt.Errorf("at least one profile (android or ios) must be defined")
 	}
-	for name, p := range c.Pool.Profiles.Android {
-		if p.SystemImage == "" {
-			return fmt.Errorf("android profile %q: system_image is required", name)
-		}
-		if p.Device == "" {
-			return fmt.Errorf("android profile %q: device is required", name)
-		}
-	}
+	// Device and SystemImage are optional — auto-detected during AVD creation
+	_ = c.Pool.Profiles.Android // profiles validated at create time, not load time
 	return nil
 }
 

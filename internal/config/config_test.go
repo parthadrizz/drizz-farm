@@ -56,18 +56,20 @@ func TestValidateRequiresProfiles(t *testing.T) {
 	}
 }
 
-func TestValidateRequiresSystemImage(t *testing.T) {
+func TestValidateAllowsEmptySystemImage(t *testing.T) {
+	// SystemImage and Device are now optional — auto-detected at AVD creation time
 	viper.Reset()
 	viper.Set("pool.profiles.android", map[string]any{
-		"bad_profile": map[string]any{
-			"device": "pixel_7",
-			// missing system_image
+		"default": map[string]any{
+			"ram_mb": 2048,
+			"gpu":    "host",
+			// no device, no system_image — should be fine
 		},
 	})
 
 	_, err := Load()
-	if err == nil {
-		t.Fatal("expected validation error for missing system_image")
+	if err != nil {
+		t.Fatalf("profiles with no system_image should be valid, got: %v", err)
 	}
 }
 

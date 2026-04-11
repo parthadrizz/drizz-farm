@@ -20,6 +20,7 @@ type AnnounceConfig struct {
 	Port          int
 	Version       string
 	Tier          string
+	Environment   string // cluster environment (prod, staging, dev, default)
 	AndroidAvail  int
 	IOSAvail      int
 	TotalCapacity int
@@ -38,10 +39,14 @@ func NewAnnouncer(ctx context.Context, cfg AnnounceConfig) (*Announcer, error) {
 		fmt.Sprintf("total_capacity=%d", cfg.TotalCapacity),
 	}
 
+	// Service type includes environment — nodes in different environments
+	// never discover each other (e.g. _drizz-farm-prod._tcp vs _drizz-farm-staging._tcp)
+	serviceType := fmt.Sprintf("_drizz-farm-%s._tcp", cfg.Environment)
+
 	server, err := zeroconf.Register(
-		cfg.NodeName,       // Instance name
-		"_drizz-farm._tcp", // Service type
-		"local.",           // Domain
+		cfg.NodeName, // Instance name
+		serviceType,  // Service type (environment-scoped)
+		"local.",     // Domain
 		cfg.Port,           // Port
 		txt,                // TXT records
 		nil,                // Interfaces (nil = all)

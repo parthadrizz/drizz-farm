@@ -28,6 +28,16 @@ func applyDefaults(cfg *Config) {
 		cfg.Node.MetricsPort = 9402
 	}
 
+	// Cluster defaults
+	if cfg.Cluster.Environment == "" {
+		cfg.Cluster.Environment = "default"
+	}
+	// If no cluster key, generate one from hostname — single-node works out of the box,
+	// multi-node requires explicit key in config
+	if cfg.Cluster.Key == "" {
+		cfg.Cluster.Key = "drizz-" + cfg.Node.Name
+	}
+
 	// API defaults
 	if cfg.API.Host == "" {
 		cfg.API.Host = "0.0.0.0"

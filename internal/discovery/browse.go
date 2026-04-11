@@ -21,8 +21,15 @@ type Node struct {
 	IOSAvail      int    `json:"ios_available"`
 }
 
-// Browse discovers drizz-farm nodes on the local network.
+// Browse discovers drizz-farm nodes on the local network within the same environment.
 func Browse(ctx context.Context, timeout time.Duration) ([]Node, error) {
+	return BrowseEnv(ctx, timeout, "default")
+}
+
+// BrowseEnv discovers drizz-farm nodes filtered by environment.
+// Nodes in different environments use different mDNS service types
+// and never see each other.
+func BrowseEnv(ctx context.Context, timeout time.Duration, environment string) ([]Node, error) {
 	resolver, err := zeroconf.NewResolver(nil)
 	if err != nil {
 		return nil, fmt.Errorf("mdns resolver: %w", err)
@@ -63,7 +70,8 @@ func Browse(ctx context.Context, timeout time.Duration) ([]Node, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	if err := resolver.Browse(ctx, "_drizz-farm._tcp", "local.", entries); err != nil {
+	serviceType := fmt.Sprintf("_drizz-farm-%s._tcp", environment)
+	if err := resolver.Browse(ctx, serviceType, "local.", entries); err != nil {
 		return nil, fmt.Errorf("mdns browse: %w", err)
 	}
 

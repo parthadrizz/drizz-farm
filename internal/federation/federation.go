@@ -60,11 +60,12 @@ type Registry struct {
 	self     string           // this node's host:port
 	selfPeer Peer             // this node's stats for leader election
 	selfUpdateFn func()       // called each refresh to update self stats
+	clusterKey   string       // shared secret for peer authentication
 	client   *http.Client
 }
 
-// NewRegistry creates a federation registry.
-func NewRegistry(selfHost string, selfPort int) *Registry {
+// NewRegistry creates a federation registry with a cluster key for peer authentication.
+func NewRegistry(selfHost string, selfPort int, clusterKey string) *Registry {
 	return &Registry{
 		peers:  make(map[string]*Peer),
 		self:   fmt.Sprintf("%s:%d", selfHost, selfPort),
@@ -73,8 +74,19 @@ func NewRegistry(selfHost string, selfPort int) *Registry {
 			Port:    selfPort,
 			Healthy: true,
 		},
+		clusterKey: clusterKey,
 		client: &http.Client{Timeout: 5 * time.Second},
 	}
+}
+
+// VerifyHandshake checks if a peer's cluster key matches ours.
+func (r *Registry) VerifyHandshake(peerKey string) bool {
+	return r.clusterKey != "" && peerKey == r.clusterKey
+}
+
+// ClusterKey returns this node's cluster key (used by API handlers).
+func (r *Registry) ClusterKey() string {
+	return r.clusterKey
 }
 
 // SetSelfUpdateFn sets a callback invoked every refresh cycle to update self stats.
@@ -150,11 +162,40 @@ func (r *Registry) LeaderName() string {
 	return best.Name
 }
 
-// AddPeer registers a discovered peer.
+// AddPeer registers a discovered peer after verifying cluster key via handshake.
+// If the peer doesn't respond to the handshake or has a wrong key, it's rejected.
 func (r *Registry) AddPeer(name, host string, port int) {
 	key := fmt.Sprintf("%s:%d", host, port)
 	if key == r.self {
 		return // don't add ourselves
+	}
+
+	// Already known — skip handshake
+	r.mu.RLock()
+	_, exists := r.peers[key]
+	r.mu.RUnlock()
+	if exists {
+		return
+	}
+
+	// Verify cluster key via handshake
+	if r.clusterKey != "" {
+		handshakeURL := fmt.Sprintf("http://%s/api/v1/federation/handshake", key)
+		body := fmt.Sprintf(`{"cluster_key":"%s"}`, r.clusterKey)
+		resp, err := r.client.Post(handshakeURL, "application/json", strings.NewReader(body))
+		if err != nil {
+			log.Debug().Str("peer", key).Err(err).Msg("federation: handshake failed (unreachable)")
+			return
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode == 403 {
+			log.Warn().Str("peer", key).Msg("federation: peer rejected (wrong cluster key)")
+			return
+		}
+		if resp.StatusCode != 200 {
+			log.Debug().Str("peer", key).Int("status", resp.StatusCode).Msg("federation: handshake unexpected status")
+			return
+		}
 	}
 
 	r.mu.Lock()
