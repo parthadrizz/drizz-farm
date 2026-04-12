@@ -731,9 +731,9 @@ func TestHandshake_WrongKey(t *testing.T) {
 
 func TestHandshake_EmptyKey(t *testing.T) {
 	reg := NewRegistry("10.0.0.1", 9401, "")
-	// Empty cluster key = no auth required
+	// Empty mesh key = no auth required
 	if reg.VerifyHandshake("anything") {
-		t.Error("empty cluster key means auth is disabled, VerifyHandshake should return false")
+		t.Error("empty mesh key means auth is disabled, VerifyHandshake should return false")
 	}
 }
 
@@ -742,10 +742,10 @@ func TestAddPeer_WithAuth(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/federation/handshake", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			ClusterKey string `json:"cluster_key"`
+			MeshKey string `json:"mesh_key"`
 		}
 		json.NewDecoder(r.Body).Decode(&req)
-		if req.ClusterKey == "shared-secret" {
+		if req.MeshKey == "shared-secret" {
 			w.WriteHeader(200)
 			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 		} else {

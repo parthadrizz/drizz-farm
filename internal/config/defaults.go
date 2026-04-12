@@ -28,15 +28,12 @@ func applyDefaults(cfg *Config) {
 		cfg.Node.MetricsPort = 9402
 	}
 
-	// Cluster defaults
-	if cfg.Cluster.Environment == "" {
-		cfg.Cluster.Environment = "default"
+	// Mesh defaults
+	if cfg.Mesh.Name == "" {
+		cfg.Mesh.Name = "default"
 	}
-	// If no cluster key, generate one from hostname — single-node works out of the box,
-	// multi-node requires explicit key in config
-	if cfg.Cluster.Key == "" {
-		cfg.Cluster.Key = "drizz-" + cfg.Node.Name
-	}
+	// No default key — setup command generates one.
+	// Empty key = no auth (single-node development).
 
 	// API defaults
 	if cfg.API.Host == "" {

@@ -179,7 +179,8 @@
       "Bash(go doc:*)",
       "Bash(grep -n \"^func \\(h \\\\*.*Handlers\\) [A-Z]\" /Users/humblefool2909/drizz-farm/internal/api/handlers_*.go)",
       "Bash(chmod +x /Users/humblefool2909/drizz-farm/ci/drizz-farm-session.sh)",
-      "Bash(rm -f .git/index.lock)"
+      "Bash(rm -f .git/index.lock)",
+      "Bash(go mod:*)"
     ]
   }
 }

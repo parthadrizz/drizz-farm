@@ -11,7 +11,7 @@ import (
 // Config is the root configuration for drizz-farm.
 type Config struct {
 	Node        NodeConfig        `yaml:"node"        mapstructure:"node"`
-	Cluster     ClusterConfig     `yaml:"cluster"     mapstructure:"cluster"`
+	Mesh        MeshConfig        `yaml:"mesh"        mapstructure:"mesh"`
 	Pool        PoolConfig        `yaml:"pool"        mapstructure:"pool"`
 	API         APIConfig         `yaml:"api"         mapstructure:"api"`
 	Network     NetworkConfig     `yaml:"network"     mapstructure:"network"`
@@ -22,11 +22,11 @@ type Config struct {
 	License     LicenseConfig     `yaml:"license"     mapstructure:"license"`
 }
 
-// ClusterConfig controls multi-node federation security.
-// Nodes only federate with peers that share the same key and environment.
-type ClusterConfig struct {
-	Key         string `yaml:"key"         mapstructure:"key"`         // shared secret for peer auth
-	Environment string `yaml:"environment" mapstructure:"environment"` // prod, staging, dev
+// MeshConfig controls multi-node mesh networking.
+// Nodes only federate with peers that share the same mesh name and key.
+type MeshConfig struct {
+	Name string `yaml:"name"        mapstructure:"name"`        // mesh name (e.g. "partha-lab")
+	Key  string `yaml:"key"         mapstructure:"key"`         // shared secret for peer auth
 }
 
 type NodeConfig struct {

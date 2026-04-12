@@ -20,7 +20,7 @@ type AnnounceConfig struct {
 	Port          int
 	Version       string
 	Tier          string
-	Environment   string // cluster environment (prod, staging, dev, default)
+	MeshName      string // mesh name — nodes in different meshes never see each other
 	AndroidAvail  int
 	IOSAvail      int
 	TotalCapacity int
@@ -39,9 +39,9 @@ func NewAnnouncer(ctx context.Context, cfg AnnounceConfig) (*Announcer, error) {
 		fmt.Sprintf("total_capacity=%d", cfg.TotalCapacity),
 	}
 
-	// Service type includes environment — nodes in different environments
-	// never discover each other (e.g. _drizz-farm-prod._tcp vs _drizz-farm-staging._tcp)
-	serviceType := fmt.Sprintf("_drizz-farm-%s._tcp", cfg.Environment)
+	// Service type includes mesh name — nodes in different meshes
+	// never discover each other (e.g. _drizz-partha-lab._tcp vs _drizz-qa-team._tcp)
+	serviceType := fmt.Sprintf("_drizz-%s._tcp", cfg.MeshName)
 
 	server, err := zeroconf.Register(
 		cfg.NodeName, // Instance name

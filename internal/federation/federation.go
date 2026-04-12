@@ -1,4 +1,4 @@
-// Package federation manages multi-node drizz-farm clusters.
+// Package federation manages multi-node drizz-farm meshes.
 // One node acts as orchestrator, routing session requests to peers with capacity.
 package federation
 
@@ -53,19 +53,19 @@ type PeerPool struct {
 	Booting int `json:"booting"`
 }
 
-// Registry tracks all known peers in the cluster.
+// Registry tracks all known peers in the mesh.
 type Registry struct {
 	mu       sync.RWMutex
 	peers    map[string]*Peer // keyed by host:port
 	self     string           // this node's host:port
 	selfPeer Peer             // this node's stats for leader election
 	selfUpdateFn func()       // called each refresh to update self stats
-	clusterKey   string       // shared secret for peer authentication
+	meshKey   string       // shared secret for peer authentication
 	client   *http.Client
 }
 
-// NewRegistry creates a federation registry with a cluster key for peer authentication.
-func NewRegistry(selfHost string, selfPort int, clusterKey string) *Registry {
+// NewRegistry creates a federation registry with a mesh key for peer authentication.
+func NewRegistry(selfHost string, selfPort int, meshKey string) *Registry {
 	return &Registry{
 		peers:  make(map[string]*Peer),
 		self:   fmt.Sprintf("%s:%d", selfHost, selfPort),
@@ -74,19 +74,19 @@ func NewRegistry(selfHost string, selfPort int, clusterKey string) *Registry {
 			Port:    selfPort,
 			Healthy: true,
 		},
-		clusterKey: clusterKey,
+		meshKey: meshKey,
 		client: &http.Client{Timeout: 5 * time.Second},
 	}
 }
 
-// VerifyHandshake checks if a peer's cluster key matches ours.
+// VerifyHandshake checks if a peer's mesh key matches ours.
 func (r *Registry) VerifyHandshake(peerKey string) bool {
-	return r.clusterKey != "" && peerKey == r.clusterKey
+	return r.meshKey != "" && peerKey == r.meshKey
 }
 
-// ClusterKey returns this node's cluster key (used by API handlers).
-func (r *Registry) ClusterKey() string {
-	return r.clusterKey
+// MeshKey returns this node's mesh key (used by API handlers).
+func (r *Registry) MeshKey() string {
+	return r.meshKey
 }
 
 // SetSelfUpdateFn sets a callback invoked every refresh cycle to update self stats.
@@ -113,7 +113,7 @@ func leaderScore(p *Peer) int {
 	return p.Available*10 + p.NumCPU*5 + (p.MemoryMB/1024)*3 + p.Capacity*2
 }
 
-// IsLeader returns true if this node is the current cluster leader.
+// IsLeader returns true if this node is the current mesh leader.
 func (r *Registry) IsLeader() bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -162,7 +162,7 @@ func (r *Registry) LeaderName() string {
 	return best.Name
 }
 
-// AddPeer registers a discovered peer after verifying cluster key via handshake.
+// AddPeer registers a discovered peer after verifying mesh key via handshake.
 // If the peer doesn't respond to the handshake or has a wrong key, it's rejected.
 func (r *Registry) AddPeer(name, host string, port int) {
 	key := fmt.Sprintf("%s:%d", host, port)
@@ -178,10 +178,10 @@ func (r *Registry) AddPeer(name, host string, port int) {
 		return
 	}
 
-	// Verify cluster key via handshake
-	if r.clusterKey != "" {
+	// Verify mesh key via handshake
+	if r.meshKey != "" {
 		handshakeURL := fmt.Sprintf("http://%s/api/v1/federation/handshake", key)
-		body := fmt.Sprintf(`{"cluster_key":"%s"}`, r.clusterKey)
+		body := fmt.Sprintf(`{"mesh_key":"%s"}`, r.meshKey)
 		resp, err := r.client.Post(handshakeURL, "application/json", strings.NewReader(body))
 		if err != nil {
 			log.Debug().Str("peer", key).Err(err).Msg("federation: handshake failed (unreachable)")
@@ -189,7 +189,7 @@ func (r *Registry) AddPeer(name, host string, port int) {
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode == 403 {
-			log.Warn().Str("peer", key).Msg("federation: peer rejected (wrong cluster key)")
+			log.Warn().Str("peer", key).Msg("federation: peer rejected (wrong mesh key)")
 			return
 		}
 		if resp.StatusCode != 200 {

@@ -21,15 +21,15 @@ type Node struct {
 	IOSAvail      int    `json:"ios_available"`
 }
 
-// Browse discovers drizz-farm nodes on the local network within the same environment.
+// Browse discovers drizz-farm nodes on the local network in the default mesh.
 func Browse(ctx context.Context, timeout time.Duration) ([]Node, error) {
-	return BrowseEnv(ctx, timeout, "default")
+	return BrowseMesh(ctx, timeout, "default")
 }
 
-// BrowseEnv discovers drizz-farm nodes filtered by environment.
-// Nodes in different environments use different mDNS service types
+// BrowseMesh discovers drizz-farm nodes filtered by mesh name.
+// Nodes in different meshes use different mDNS service types
 // and never see each other.
-func BrowseEnv(ctx context.Context, timeout time.Duration, environment string) ([]Node, error) {
+func BrowseMesh(ctx context.Context, timeout time.Duration, meshName string) ([]Node, error) {
 	resolver, err := zeroconf.NewResolver(nil)
 	if err != nil {
 		return nil, fmt.Errorf("mdns resolver: %w", err)
@@ -70,7 +70,7 @@ func BrowseEnv(ctx context.Context, timeout time.Duration, environment string) (
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	serviceType := fmt.Sprintf("_drizz-farm-%s._tcp", environment)
+	serviceType := fmt.Sprintf("_drizz-%s._tcp", meshName)
 	if err := resolver.Browse(ctx, serviceType, "local.", entries); err != nil {
 		return nil, fmt.Errorf("mdns browse: %w", err)
 	}

@@ -148,14 +148,14 @@ func RegisterRoutes(r chi.Router, cfg *config.Config, p *pool.Pool, b *session.B
 					return
 				}
 				var req struct {
-					ClusterKey string `json:"cluster_key"`
+					MeshKey string `json:"mesh_key"`
 				}
 				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 					JSON(w, 400, ErrorResponse{Error: "invalid", Message: "bad request", Code: 400})
 					return
 				}
-				if !deps.Federation.VerifyHandshake(req.ClusterKey) {
-					JSON(w, 403, ErrorResponse{Error: "forbidden", Message: "invalid cluster key", Code: 403})
+				if !deps.Federation.VerifyHandshake(req.MeshKey) {
+					JSON(w, 403, ErrorResponse{Error: "forbidden", Message: "invalid mesh key", Code: 403})
 					return
 				}
 				JSON(w, 200, map[string]string{"status": "ok"})
