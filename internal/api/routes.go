@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 
@@ -141,7 +142,33 @@ func RegisterRoutes(r chi.Router, cfg *config.Config, p *pool.Pool, b *session.B
 
 		// Federation — manage all nodes from orchestrator
 		r.Route("/federation", func(r chi.Router) {
-			// Handshake — peer sends cluster key, we verify before accepting
+			// Add peer manually (when mDNS doesn't work)
+			r.Post("/add-peer", func(w http.ResponseWriter, r *http.Request) {
+				if deps.Federation == nil {
+					JSON(w, 500, ErrorResponse{Error: "no_federation", Message: "federation not enabled", Code: 500})
+					return
+				}
+				var req struct {
+					Host string `json:"host"`
+					Port int    `json:"port"`
+					Name string `json:"name"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+					JSON(w, 400, ErrorResponse{Error: "invalid", Message: "bad request", Code: 400})
+					return
+				}
+				if req.Host == "" || req.Port == 0 {
+					JSON(w, 400, ErrorResponse{Error: "invalid", Message: "host and port required", Code: 400})
+					return
+				}
+				if req.Name == "" {
+					req.Name = req.Host
+				}
+				deps.Federation.AddPeer(req.Name, req.Host, req.Port)
+				JSON(w, 200, map[string]string{"status": "ok", "peer": fmt.Sprintf("%s:%d", req.Host, req.Port)})
+			})
+
+			// Handshake — peer sends mesh key, we verify before accepting
 			r.Post("/handshake", func(w http.ResponseWriter, r *http.Request) {
 				if deps.Federation == nil {
 					JSON(w, 200, map[string]string{"status": "ok"})

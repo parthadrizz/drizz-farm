@@ -14,6 +14,7 @@ type Node struct {
 	Name          string `json:"name"`
 	Host          string `json:"host"`
 	Port          int    `json:"port"`
+	MeshName      string `json:"mesh_name"`
 	Version       string `json:"version"`
 	Tier          string `json:"tier"`
 	TotalCapacity int    `json:"total_capacity"`
@@ -62,15 +63,18 @@ func BrowseMesh(ctx context.Context, timeout time.Duration, meshName string) ([]
 				parseTXTRecord(txt, &node)
 			}
 
-			nodes = append(nodes, node)
-			log.Debug().Str("node", node.Name).Str("host", node.Host).Msg("discovery: found node")
+			// Filter by mesh name (empty meshName = return all, for setup scanning)
+			if meshName == "" || node.MeshName == meshName {
+				nodes = append(nodes, node)
+				log.Debug().Str("node", node.Name).Str("host", node.Host).Str("mesh", node.MeshName).Msg("discovery: found node")
+			}
 		}
 	}()
 
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	serviceType := fmt.Sprintf("_drizz-%s._tcp", meshName)
+	serviceType := "_drizz-farm._tcp"
 	if err := resolver.Browse(ctx, serviceType, "local.", entries); err != nil {
 		return nil, fmt.Errorf("mdns browse: %w", err)
 	}
@@ -87,6 +91,8 @@ func parseTXTRecord(txt string, node *Node) {
 			switch key {
 			case "version":
 				node.Version = val
+			case "mesh":
+				node.MeshName = val
 			case "tier":
 				node.Tier = val
 			case "total_capacity":

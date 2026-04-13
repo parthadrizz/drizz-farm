@@ -33,15 +33,16 @@ func NewAnnouncer(ctx context.Context, cfg AnnounceConfig) (*Announcer, error) {
 	txt := []string{
 		fmt.Sprintf("version=%s", cfg.Version),
 		fmt.Sprintf("node=%s", cfg.NodeName),
+		fmt.Sprintf("mesh=%s", cfg.MeshName),
 		fmt.Sprintf("tier=%s", cfg.Tier),
 		fmt.Sprintf("android_available=%d", cfg.AndroidAvail),
 		fmt.Sprintf("ios_available=%d", cfg.IOSAvail),
 		fmt.Sprintf("total_capacity=%d", cfg.TotalCapacity),
 	}
 
-	// Service type includes mesh name — nodes in different meshes
-	// never discover each other (e.g. _drizz-partha-lab._tcp vs _drizz-qa-team._tcp)
-	serviceType := fmt.Sprintf("_drizz-%s._tcp", cfg.MeshName)
+	// All drizz-farm nodes use the same service type for discovery.
+	// Mesh name is in the TXT record — filtering happens at the application layer.
+	serviceType := "_drizz-farm._tcp"
 
 	server, err := zeroconf.Register(
 		cfg.NodeName, // Instance name

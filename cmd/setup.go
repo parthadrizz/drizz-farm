@@ -186,21 +186,33 @@ func discoverMeshes() []discoveredMesh {
 
 	// Scan for any _drizz-*._tcp services on the network
 	// Try common names and the "default" mesh
-	meshNames := []string{"default"}
+	// Scan for ALL drizz-farm nodes (empty mesh name = no filter)
+	allNodes, err := discovery.BrowseMesh(ctx, 3*time.Second, "")
+	if err != nil {
+		return nil
+	}
 
-	// Also try a broad scan — look for any _drizz- prefixed services
-	// This is a simplified approach; in production we'd use a broader mDNS query
-	var meshes []discoveredMesh
-	seen := make(map[string]bool)
-
-	for _, name := range meshNames {
-		nodes, err := discovery.BrowseMesh(ctx, 3*time.Second, name)
-		if err != nil || len(nodes) == 0 {
-			continue
+	// Group nodes by mesh name
+	meshMap := make(map[string][]discovery.Node)
+	for _, n := range allNodes {
+		name := n.MeshName
+		if name == "" {
+			name = "default"
 		}
-		if !seen[name] {
-			meshes = append(meshes, discoveredMesh{name: name, nodeCount: len(nodes), nodes: nodes})
-			seen[name] = true
+		meshMap[name] = append(meshMap[name], n)
+	}
+
+	// Build sorted list (most nodes first)
+	var meshes []discoveredMesh
+	for name, nodes := range meshMap {
+		meshes = append(meshes, discoveredMesh{name: name, nodeCount: len(nodes), nodes: nodes})
+	}
+	// Sort by node count descending
+	for i := 0; i < len(meshes); i++ {
+		for j := i + 1; j < len(meshes); j++ {
+			if meshes[j].nodeCount > meshes[i].nodeCount {
+				meshes[i], meshes[j] = meshes[j], meshes[i]
+			}
 		}
 	}
 

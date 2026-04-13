@@ -109,8 +109,111 @@ export function Dashboard() {
     { label: 'Error', value: pool.error, color: 'text-red-400' },
   ];
 
+  const isFirstBoot = avds.length === 0 && pool.instances.length === 0;
+  const hasAVDsButNoneRunning = avds.length > 0 && pool.instances.length === 0;
+
+  // Quick-create: create AVDs using detected system images and boot them
+  const [quickCreating, setQuickCreating] = useState(false);
+  const [systemImages, setSystemImages] = useState<any[]>([]);
+  const [quickCreateCount, setQuickCreateCount] = useState(Math.min(3, pool.total_capacity || 3));
+
+  useEffect(() => {
+    if (isFirstBoot) {
+      api.systemImages().then((r: any) => setSystemImages(r.images || [])).catch(() => {});
+    }
+  }, [isFirstBoot]);
+
+  const handleQuickCreate = async () => {
+    setQuickCreating(true);
+    try {
+      const img = systemImages[0]; // best available image
+      if (!img) { alert('No system images installed. Run: sdkmanager --install "system-images;android-35;google_apis;arm64-v8a"'); return; }
+      await api.createAVDs({ system_image: img.path, device: 'pixel', count: quickCreateCount, profile_name: 'default' });
+      await new Promise(r => setTimeout(r, 2000));
+      refresh();
+    } catch (e: any) { alert(e.message); }
+    setQuickCreating(false);
+  };
+
+  const handleBootAll = async () => {
+    setActionLoading('boot-all');
+    for (const avd of avds) {
+      try { await api.bootAVD(avd); } catch {}
+    }
+    setActionLoading(null);
+    refresh();
+  };
+
   return (
     <div className="space-y-6">
+      {/* First Boot — Create Emulators */}
+      {isFirstBoot && (
+        <div className="bg-gradient-to-br from-gray-900 to-gray-800 rounded-xl border border-gray-700 p-8 text-center">
+          <div className="text-4xl mb-4">📱</div>
+          <h1 className="text-2xl font-bold text-white mb-2">Welcome to drizz-farm</h1>
+          <p className="text-gray-400 mb-6 max-w-md mx-auto">
+            Create emulators to start your device lab. They'll boot on-demand when tests need them.
+          </p>
+
+          {systemImages.length > 0 ? (
+            <div className="max-w-sm mx-auto space-y-4">
+              <div className="bg-gray-800/50 rounded-lg p-4 text-left">
+                <div className="text-xs text-gray-500 mb-1">Detected system image:</div>
+                <div className="text-sm text-emerald-400 font-mono">{systemImages[0].api_name} ({systemImages[0].variant})</div>
+                <div className="flex items-center gap-3 mt-3">
+                  <label className="text-xs text-gray-400">How many:</label>
+                  <div className="flex gap-1">
+                    {[1, 2, 3, 4, 5].filter(n => n <= (pool.total_capacity || 5)).map(n => (
+                      <button key={n} onClick={() => setQuickCreateCount(n)}
+                        className={`w-8 h-8 rounded text-sm font-medium transition ${
+                          quickCreateCount === n ? 'bg-emerald-500 text-white' : 'bg-gray-700 text-gray-400 hover:bg-gray-600'
+                        }`}>{n}</button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <button onClick={handleQuickCreate} disabled={quickCreating}
+                className="w-full px-6 py-3 bg-emerald-500 text-white rounded-lg font-medium hover:bg-emerald-400 transition disabled:opacity-50">
+                {quickCreating ? 'Creating...' : `Create ${quickCreateCount} Emulator${quickCreateCount > 1 ? 's' : ''}`}
+              </button>
+              <button onClick={() => navigate('/create')} className="text-xs text-gray-500 hover:text-emerald-400 transition">
+                Advanced options
+              </button>
+            </div>
+          ) : (
+            <div className="max-w-md mx-auto space-y-3">
+              <div className="text-sm text-yellow-400">No Android system images installed.</div>
+              <code className="text-xs bg-gray-800 text-gray-300 px-3 py-2 rounded block">
+                sdkmanager --install "system-images;android-35;google_apis;arm64-v8a"
+              </code>
+              <div className="text-xs text-gray-600">Then refresh this page.</div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* AVDs exist but none running */}
+      {hasAVDsButNoneRunning && (
+        <div className="bg-gray-900 rounded-lg border border-emerald-500/30 p-6 text-center">
+          <div className="text-lg font-medium text-white mb-2">
+            {avds.length} emulator{avds.length > 1 ? 's' : ''} ready to boot
+          </div>
+          <p className="text-gray-400 text-sm mb-4">
+            Your emulators are created but not running. Boot them to start using your device lab.
+          </p>
+          <div className="flex gap-3 justify-center">
+            <button onClick={handleBootAll} disabled={actionLoading === 'boot-all'}
+              className="px-5 py-2 bg-emerald-500 text-white rounded-lg font-medium hover:bg-emerald-400 transition disabled:opacity-50">
+              {actionLoading === 'boot-all' ? 'Booting...' : `Boot All (${avds.length})`}
+            </button>
+            <button onClick={() => navigate('/create')}
+              className="px-5 py-2 bg-gray-700 text-gray-300 rounded-lg font-medium hover:bg-gray-600 transition">
+              Create More
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Stats */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         {stats.map(s => (
