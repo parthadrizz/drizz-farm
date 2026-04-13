@@ -114,12 +114,10 @@ func runSetup(cmd *cobra.Command, args []string) error {
 
 	fmt.Println()
 	fmt.Println("  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-	fmt.Println("  ✓ Config saved to ~/.drizz-farm/config.yaml")
+	fmt.Println("  ✓ Config saved")
 	fmt.Println()
 	fmt.Println("  Next:")
 	fmt.Println("    drizz-farm start")
-	fmt.Println()
-	fmt.Println("  Dashboard will be at http://localhost:9401")
 	fmt.Println("  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	fmt.Println()
 

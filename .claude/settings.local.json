@@ -186,7 +186,14 @@
       "Bash(curl -s --max-time 3 http://192.168.0.5:9401/api/v1/federation/status)",
       "Bash(python3 -c \" import sys,json d=json.load\\(sys.stdin\\) print\\(json.dumps\\(d, indent=2\\)\\) \")",
       "Bash(curl -s -X POST http://192.168.0.5:9401/api/v1/federation/handshake -H 'Content-Type: application/json' -d '{\"mesh_key\":\"99ebe437f4d9bd00cf88b2e3\"}')",
-      "Bash(go run:*)"
+      "Bash(go run:*)",
+      "Bash(python3 -c \" import sys,json d=json.load\\(sys.stdin\\) print\\(f'Leader: {d.get\\(\\\\\"leader\\\\\",\\\\\"?\\\\\"\\)}'\\) for n in d['nodes']: print\\(f' {n.get\\(\\\\\"name\\\\\",\\\\\"?\\\\\"\\):30s} role={n.get\\(\\\\\"role\\\\\",\\\\\"?\\\\\"\\):6s} score={n.get\\(\\\\\"score\\\\\",0\\)}'\\) \" echo \"\" echo \"=== Pool ===\" curl -s http://localhost:9401/api/v1/pool)",
+      "Bash(python3 -c \" import sys,json d=json.load\\(sys.stdin\\) print\\(f'Node: {d[\\\\\"node_name\\\\\"]}'\\) print\\(f'Capacity: {d[\\\\\"total_capacity\\\\\"]}, Instances: {len\\(d[\\\\\"instances\\\\\"]\\)}'\\) \" echo \"\" echo \"=== AVDs ===\" curl -s http://localhost:9401/api/v1/discovery/avds)",
+      "Bash(open http://localhost:9401)",
+      "Bash(python3 -c \"import sys,json; print\\(json.dumps\\(json.load\\(sys.stdin\\), indent=2\\)\\)\")",
+      "Bash(ls /Users/humblefool2909/Downloads/prodigy*)",
+      "Bash(curl -sf http://localhost:9401/api/v1/pool)",
+      "Bash(node -e \"const l = require\\('lucide-react'\\); console.log\\(Object.keys\\(l\\).filter\\(k => /phone|tablet|usb|plug|cable|android/i.test\\(k\\) && !k.includes\\('Icon'\\) && !k.includes\\('Lucide'\\)\\).join\\('\\\\n'\\)\\)\")"
     ]
   }
 }

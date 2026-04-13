@@ -226,9 +226,10 @@ func runStart(cmd *cobra.Command, args []string) error {
 		Msg("drizz-farm is LIVE — emulators boot on-demand")
 
 	fmt.Printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-	fmt.Printf("  drizz-farm is LIVE on %s:%d\n", cfg.API.Host, cfg.API.Port)
-	fmt.Printf("  Node: %s | Tier: %s\n", cfg.Node.Name, lic.Current().Tier)
-	fmt.Printf("  Emulators boot on-demand (capacity: %d)\n", cfg.Pool.MaxConcurrent)
+	fmt.Printf("  drizz-farm is LIVE\n")
+	fmt.Printf("  Dashboard: http://localhost:%d\n", cfg.API.Port)
+	fmt.Printf("  Node: %s | Capacity: %d\n", cfg.Node.Name, cfg.Pool.MaxConcurrent)
+	fmt.Printf("  Mesh: %s\n", cfg.Mesh.Name)
 	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
 
 	// Wait for signal or error

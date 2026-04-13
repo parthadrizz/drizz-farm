@@ -1,8 +1,105 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&family=Fira+Code:wght@400;500;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-body {
-  margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+@layer base {
+  :root {
+    /* ── GitHub Dark inspired theme ── */
+    --background: 216 28% 7%;       /* #0d1117 */
+    --foreground: 210 14% 83%;      /* #c9d1d9 */
+
+    --card: 215 21% 11%;            /* #161b22 */
+    --card-foreground: 210 14% 83%;
+
+    --primary: 150 70% 42%;         /* green accent */
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 215 14% 16%;       /* #21262d */
+    --secondary-foreground: 210 14% 73%;
+
+    --muted: 215 14% 16%;
+    --muted-foreground: 215 10% 50%;
+
+    --accent: 215 14% 18%;
+    --accent-foreground: 210 14% 83%;
+
+    --destructive: 0 72% 51%;
+
+    --border: 215 14% 18%;          /* #30363d */
+    --input: 215 14% 20%;
+    --ring: 150 70% 42%;
+    --radius: 0.5rem;
+
+    /* Status colors */
+    --status-running: 150 70% 42%;
+    --status-paused: 38 90% 50%;
+    --status-blocked: 4 75% 55%;
+    --status-idle: 215 10% 50%;
+
+    /* Surface layers — dark gradation for depth */
+    --surface-0: 216 28% 7%;        /* #0d1117  deepest */
+    --surface-1: 215 21% 11%;       /* #161b22 */
+    --surface-2: 215 14% 14%;       /* #1c2128 */
+    --surface-3: 215 14% 18%;       /* #30363d */
+
+    /* Glow effects */
+    --glow-primary: 150 70% 42%;
+    --glow-warning: 38 90% 50%;
+    --glow-danger: 4 75% 55%;
+  }
+}
+
+@layer base {
+  * {
+    border-color: hsl(var(--border));
+  }
+
+  body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-family: 'Fira Code', 'IBM Plex Mono', monospace;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    margin: 0;
+  }
+
+  code, pre, .font-mono {
+    font-family: 'Fira Code', 'IBM Plex Mono', 'JetBrains Mono', monospace;
+  }
+
+  /* Scrollbar — dark theme */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: hsl(215 14% 25%); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: hsl(215 14% 35%); }
+}
+
+@layer utilities {
+  .surface-0 { background-color: hsl(var(--surface-0)); }
+  .surface-1 { background-color: hsl(var(--surface-1)); }
+  .surface-2 { background-color: hsl(var(--surface-2)); }
+  .surface-3 { background-color: hsl(var(--surface-3)); }
+
+  .glow-primary { box-shadow: 0 0 24px -6px hsl(var(--glow-primary) / 0.35); }
+  .glow-warning { box-shadow: 0 0 24px -6px hsl(var(--glow-warning) / 0.35); }
+  .glow-danger { box-shadow: 0 0 24px -6px hsl(var(--glow-danger) / 0.35); }
+
+  .status-dot { @apply w-2 h-2 rounded-full; }
+  .status-dot-running {
+    background-color: hsl(var(--status-running));
+    box-shadow: 0 0 8px hsl(var(--status-running) / 0.6);
+  }
+  .status-dot-paused {
+    background-color: hsl(var(--status-paused));
+    box-shadow: 0 0 8px hsl(var(--status-paused) / 0.6);
+  }
+  .status-dot-blocked {
+    background-color: hsl(var(--status-blocked));
+    box-shadow: 0 0 8px hsl(var(--status-blocked) / 0.6);
+  }
+  .status-dot-idle {
+    background-color: hsl(var(--status-idle));
+  }
 }

@@ -51,6 +51,7 @@ export interface Session {
 export interface NodeHealth {
   status: string;
   node: string;
+  mesh: { id: string; name: string };
   version: string;
   uptime: string;
   pool: { capacity: number; warm: number; allocated: number; booting: number; error: number };

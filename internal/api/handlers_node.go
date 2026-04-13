@@ -35,6 +35,10 @@ func (h *nodeHandlers) Health(w http.ResponseWriter, r *http.Request) {
 		"status":   "healthy",
 		"node":     h.cfg.Node.Name,
 		"hostname": hostname,
+		"mesh": map[string]any{
+			"id":   h.cfg.Mesh.ID,
+			"name": h.cfg.Mesh.Name,
+		},
 		"version":  buildinfo.Version,
 		"uptime":   time.Since(h.startedAt).String(),
 		"platform": runtime.GOOS + "/" + runtime.GOARCH,
