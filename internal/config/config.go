@@ -23,9 +23,10 @@ type Config struct {
 }
 
 // MeshConfig controls multi-node mesh networking.
-// Nodes only federate with peers that share the same mesh name and key.
+// Nodes federate with peers that share the same mesh ID and key.
 type MeshConfig struct {
-	Name string `yaml:"name"        mapstructure:"name"`        // mesh name (e.g. "partha-lab")
+	ID   string `yaml:"id"          mapstructure:"id"`          // unique mesh identifier (auto-generated)
+	Name string `yaml:"name"        mapstructure:"name"`        // display label (defaults to hostname)
 	Key  string `yaml:"key"         mapstructure:"key"`         // shared secret for peer auth
 }
 

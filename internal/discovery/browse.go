@@ -14,6 +14,7 @@ type Node struct {
 	Name          string `json:"name"`
 	Host          string `json:"host"`
 	Port          int    `json:"port"`
+	MeshID        string `json:"mesh_id"`
 	MeshName      string `json:"mesh_name"`
 	Version       string `json:"version"`
 	Tier          string `json:"tier"`
@@ -63,8 +64,8 @@ func BrowseMesh(ctx context.Context, timeout time.Duration, meshName string) ([]
 				parseTXTRecord(txt, &node)
 			}
 
-			// Filter by mesh name (empty meshName = return all, for setup scanning)
-			if meshName == "" || node.MeshName == meshName {
+			// Filter by mesh ID (empty = return all, for setup scanning)
+			if meshName == "" || node.MeshID == meshName || node.MeshName == meshName {
 				nodes = append(nodes, node)
 				log.Debug().Str("node", node.Name).Str("host", node.Host).Str("mesh", node.MeshName).Msg("discovery: found node")
 			}
@@ -91,6 +92,8 @@ func parseTXTRecord(txt string, node *Node) {
 			switch key {
 			case "version":
 				node.Version = val
+			case "mesh_id":
+				node.MeshID = val
 			case "mesh":
 				node.MeshName = val
 			case "tier":

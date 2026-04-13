@@ -20,7 +20,8 @@ type AnnounceConfig struct {
 	Port          int
 	Version       string
 	Tier          string
-	MeshName      string // mesh name — nodes in different meshes never see each other
+	MeshID        string // unique mesh identifier for discovery filtering
+	MeshName      string // display label
 	AndroidAvail  int
 	IOSAvail      int
 	TotalCapacity int
@@ -33,6 +34,7 @@ func NewAnnouncer(ctx context.Context, cfg AnnounceConfig) (*Announcer, error) {
 	txt := []string{
 		fmt.Sprintf("version=%s", cfg.Version),
 		fmt.Sprintf("node=%s", cfg.NodeName),
+		fmt.Sprintf("mesh_id=%s", cfg.MeshID),
 		fmt.Sprintf("mesh=%s", cfg.MeshName),
 		fmt.Sprintf("tier=%s", cfg.Tier),
 		fmt.Sprintf("android_available=%d", cfg.AndroidAvail),

@@ -185,7 +185,8 @@
       "Bash(curl -s --max-time 3 http://192.168.0.5:9401/api/v1/pool)",
       "Bash(curl -s --max-time 3 http://192.168.0.5:9401/api/v1/federation/status)",
       "Bash(python3 -c \" import sys,json d=json.load\\(sys.stdin\\) print\\(json.dumps\\(d, indent=2\\)\\) \")",
-      "Bash(curl -s -X POST http://192.168.0.5:9401/api/v1/federation/handshake -H 'Content-Type: application/json' -d '{\"mesh_key\":\"99ebe437f4d9bd00cf88b2e3\"}')"
+      "Bash(curl -s -X POST http://192.168.0.5:9401/api/v1/federation/handshake -H 'Content-Type: application/json' -d '{\"mesh_key\":\"99ebe437f4d9bd00cf88b2e3\"}')",
+      "Bash(go run:*)"
     ]
   }
 }

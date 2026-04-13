@@ -1,12 +1,31 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"time"
 
 	"github.com/rs/zerolog/log"
 )
+
+// generateMeshID creates a unique mesh identifier: 8 hex chars timestamp + 8 random.
+func generateMeshID() string {
+	ts := fmt.Sprintf("%08x", time.Now().Unix())
+	b := make([]byte, 4)
+	rand.Read(b)
+	return ts + hex.EncodeToString(b)
+}
+
+// generateMeshKey creates a random auth key for mesh peer authentication.
+func generateMeshKey() string {
+	b := make([]byte, 12)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
 
 func applyDefaults(cfg *Config) {
 	// Node defaults
@@ -29,11 +48,15 @@ func applyDefaults(cfg *Config) {
 	}
 
 	// Mesh defaults
-	if cfg.Mesh.Name == "" {
-		cfg.Mesh.Name = "default"
+	if cfg.Mesh.ID == "" {
+		cfg.Mesh.ID = generateMeshID()
 	}
-	// No default key — setup command generates one.
-	// Empty key = no auth (single-node development).
+	if cfg.Mesh.Name == "" {
+		cfg.Mesh.Name = cfg.Node.Name // defaults to hostname
+	}
+	if cfg.Mesh.Key == "" {
+		cfg.Mesh.Key = generateMeshKey()
+	}
 
 	// API defaults
 	if cfg.API.Host == "" {

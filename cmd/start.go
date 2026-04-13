@@ -163,6 +163,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 			Port:          cfg.API.Port,
 			Version:       buildinfo.Version,
 			Tier:          string(lic.Current().Tier),
+			MeshID:        cfg.Mesh.ID,
 			MeshName:      cfg.Mesh.Name,
 			TotalCapacity: cfg.Pool.MaxConcurrent,
 		})
@@ -175,7 +176,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 	if cfg.Network.MDNS.Enabled {
 		go func() {
 			time.Sleep(3 * time.Second) // Wait for own mDNS to settle
-			nodes, err := discovery.BrowseMesh(ctx, 5*time.Second, cfg.Mesh.Name)
+			nodes, err := discovery.BrowseMesh(ctx, 5*time.Second, cfg.Mesh.ID)
 			if err == nil {
 				for _, n := range nodes {
 					fedRegistry.AddPeer(n.Name, n.Host, n.Port)
@@ -192,7 +193,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
-					nodes, err := discovery.BrowseMesh(ctx, 3*time.Second, cfg.Mesh.Name)
+					nodes, err := discovery.BrowseMesh(ctx, 3*time.Second, cfg.Mesh.ID)
 					if err == nil {
 						for _, n := range nodes {
 							fedRegistry.AddPeer(n.Name, n.Host, n.Port)
