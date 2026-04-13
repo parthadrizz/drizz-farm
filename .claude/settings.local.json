@@ -193,7 +193,16 @@
       "Bash(python3 -c \"import sys,json; print\\(json.dumps\\(json.load\\(sys.stdin\\), indent=2\\)\\)\")",
       "Bash(ls /Users/humblefool2909/Downloads/prodigy*)",
       "Bash(curl -sf http://localhost:9401/api/v1/pool)",
-      "Bash(node -e \"const l = require\\('lucide-react'\\); console.log\\(Object.keys\\(l\\).filter\\(k => /phone|tablet|usb|plug|cable|android/i.test\\(k\\) && !k.includes\\('Icon'\\) && !k.includes\\('Lucide'\\)\\).join\\('\\\\n'\\)\\)\")"
+      "Bash(node -e \"const l = require\\('lucide-react'\\); console.log\\(Object.keys\\(l\\).filter\\(k => /phone|tablet|usb|plug|cable|android/i.test\\(k\\) && !k.includes\\('Icon'\\) && !k.includes\\('Lucide'\\)\\).join\\('\\\\n'\\)\\)\")",
+      "Bash(gh repo:*)",
+      "Bash(mkdir -p /Users/humblefool2909/Downloads/drizz-farm-frontend)",
+      "Bash(cp -r /Users/humblefool2909/drizz-farm/web/src /Users/humblefool2909/drizz-farm/web/index.html /Users/humblefool2909/drizz-farm/web/package.json /Users/humblefool2909/drizz-farm/web/tsconfig.json /Users/humblefool2909/drizz-farm/web/vite.config.ts /Users/humblefool2909/drizz-farm/web/tailwind.config.js /Users/humblefool2909/Downloads/drizz-farm-frontend/)",
+      "Bash(zip -r drizz-farm-frontend.zip drizz-farm-frontend/ -x \"*/node_modules/*\")",
+      "Bash(grep \"text-foreground\\\\|text-primary\\\\|text-muted-foreground\\\\|bg-background\" /Users/humblefool2909/drizz-farm/web/dist/assets/index-*.css)",
+      "Bash(grep -o \"text-foreground\\\\|text-primary\\\\|text-muted-foreground\\\\|bg-background\\\\|text-accent\\\\|text-destructive\\\\|border-border\" /Users/humblefool2909/drizz-farm/web/dist/assets/index-*.css)",
+      "Bash(grep -A1 \"text-foreground\" /Users/humblefool2909/drizz-farm/web/dist/assets/index-*.css)",
+      "WebFetch(domain:happy-dev-view.lovable.app)",
+      "mcp__playwright__browser_snapshot"
     ]
   }
 }

@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&family=Fira+Code:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500;600;700&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -6,74 +6,67 @@
 
 @layer base {
   :root {
-    /* ── GitHub Dark inspired theme ── */
-    --background: 216 28% 7%;       /* #0d1117 */
-    --foreground: 210 14% 83%;      /* #c9d1d9 */
-
-    --card: 215 21% 11%;            /* #161b22 */
+    --background: 216 28% 7%;
+    --foreground: 210 14% 83%;
+    --card: 215 21% 11%;
     --card-foreground: 210 14% 83%;
-
-    --primary: 150 70% 42%;         /* green accent */
-    --primary-foreground: 0 0% 100%;
-
-    --secondary: 215 14% 16%;       /* #21262d */
+    --popover: 215 21% 11%;
+    --popover-foreground: 210 14% 83%;
+    --primary: 150 70% 42%;
+    --primary-foreground: 216 28% 7%;
+    --secondary: 215 14% 16%;
     --secondary-foreground: 210 14% 73%;
-
-    --muted: 215 14% 16%;
+    --muted: 215 14% 14%;
     --muted-foreground: 215 10% 50%;
-
-    --accent: 215 14% 18%;
-    --accent-foreground: 210 14% 83%;
-
-    --destructive: 0 72% 51%;
-
-    --border: 215 14% 18%;          /* #30363d */
+    --accent: 212 92% 67%;
+    --accent-foreground: 216 28% 7%;
+    --destructive: 4 75% 55%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 215 14% 18%;
     --input: 215 14% 20%;
     --ring: 150 70% 42%;
     --radius: 0.5rem;
-
-    /* Status colors */
+    --surface-0: 216 28% 7%;
+    --surface-1: 215 21% 11%;
+    --surface-2: 215 14% 14%;
+    --surface-3: 215 14% 18%;
     --status-running: 150 70% 42%;
-    --status-paused: 38 90% 50%;
-    --status-blocked: 4 75% 55%;
-    --status-idle: 215 10% 50%;
-
-    /* Surface layers — dark gradation for depth */
-    --surface-0: 216 28% 7%;        /* #0d1117  deepest */
-    --surface-1: 215 21% 11%;       /* #161b22 */
-    --surface-2: 215 14% 14%;       /* #1c2128 */
-    --surface-3: 215 14% 18%;       /* #30363d */
-
-    /* Glow effects */
+    --status-warm: 150 70% 42%;
+    --status-allocated: 212 92% 67%;
+    --status-booting: 38 90% 50%;
+    --status-error: 4 75% 55%;
+    --status-idle: 215 10% 35%;
+    --status-offline: 215 10% 30%;
     --glow-primary: 150 70% 42%;
+    --glow-accent: 212 92% 67%;
     --glow-warning: 38 90% 50%;
     --glow-danger: 4 75% 55%;
+    --sidebar-background: 215 21% 11%;
+    --sidebar-foreground: 210 14% 83%;
+    --sidebar-primary: 150 70% 42%;
+    --sidebar-primary-foreground: 216 28% 7%;
+    --sidebar-accent: 215 14% 14%;
+    --sidebar-accent-foreground: 210 14% 83%;
+    --sidebar-border: 215 14% 18%;
+    --sidebar-ring: 150 70% 42%;
   }
 }
 
 @layer base {
-  * {
-    border-color: hsl(var(--border));
-  }
-
+  * { @apply border-border; }
   body {
-    background-color: hsl(var(--background));
-    color: hsl(var(--foreground));
-    font-family: 'Fira Code', 'IBM Plex Mono', monospace;
+    @apply bg-background text-foreground;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    margin: 0;
   }
-
   code, pre, .font-mono {
-    font-family: 'Fira Code', 'IBM Plex Mono', 'JetBrains Mono', monospace;
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
   }
-
-  /* Scrollbar — dark theme */
-  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
   ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: hsl(215 14% 25%); border-radius: 3px; }
-  ::-webkit-scrollbar-thumb:hover { background: hsl(215 14% 35%); }
+  ::-webkit-scrollbar-thumb { background: hsl(215 14% 22%); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: hsl(215 14% 30%); }
 }
 
 @layer utilities {
@@ -81,25 +74,56 @@
   .surface-1 { background-color: hsl(var(--surface-1)); }
   .surface-2 { background-color: hsl(var(--surface-2)); }
   .surface-3 { background-color: hsl(var(--surface-3)); }
+  .glow-primary { box-shadow: 0 0 20px -4px hsl(var(--glow-primary) / 0.3); }
+  .glow-accent { box-shadow: 0 0 20px -4px hsl(var(--glow-accent) / 0.3); }
+  .glow-warning { box-shadow: 0 0 20px -4px hsl(var(--glow-warning) / 0.3); }
+  .glow-danger { box-shadow: 0 0 20px -4px hsl(var(--glow-danger) / 0.3); }
+  .status-dot { @apply w-2 h-2 rounded-full transition-all duration-500; }
+  .status-dot-running { background-color: hsl(var(--status-running)); box-shadow: 0 0 8px hsl(var(--status-running) / 0.6); }
+  .status-dot-warm { background-color: hsl(var(--status-warm)); box-shadow: 0 0 8px hsl(var(--status-warm) / 0.6); }
+  .status-dot-allocated { background-color: hsl(var(--status-allocated)); box-shadow: 0 0 8px hsl(var(--status-allocated) / 0.6); }
+  .status-dot-booting { background-color: hsl(var(--status-booting)); box-shadow: 0 0 8px hsl(var(--status-booting) / 0.5); }
+  .status-dot-blocked, .status-dot-error { background-color: hsl(var(--status-error)); box-shadow: 0 0 8px hsl(var(--status-error) / 0.5); }
+  .status-dot-idle, .status-dot-offline { background-color: hsl(var(--status-idle)); }
+  .glass-panel { @apply backdrop-blur-xl; background: hsl(var(--surface-1) / 0.8); border: 1px solid hsl(var(--border)); }
+  .card-hover { @apply transition-all duration-200; }
+  .card-hover:hover { background-color: hsl(var(--surface-2) / 0.9); border-color: hsl(var(--primary) / 0.15); box-shadow: inset 2px 0 0 hsl(var(--primary) / 0.3); }
+  .animate-fade-in { animation: fadeIn 0.3s ease-out; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 
-  .glow-primary { box-shadow: 0 0 24px -6px hsl(var(--glow-primary) / 0.35); }
-  .glow-warning { box-shadow: 0 0 24px -6px hsl(var(--glow-warning) / 0.35); }
-  .glow-danger { box-shadow: 0 0 24px -6px hsl(var(--glow-danger) / 0.35); }
+  .animate-slide-in { animation: slideIn 0.3s ease-out; }
+  @keyframes slideIn { from { opacity: 0; transform: translateX(-8px); } to { opacity: 1; transform: translateX(0); } }
+}
 
-  .status-dot { @apply w-2 h-2 rounded-full; }
-  .status-dot-running {
-    background-color: hsl(var(--status-running));
-    box-shadow: 0 0 8px hsl(var(--status-running) / 0.6);
-  }
-  .status-dot-paused {
-    background-color: hsl(var(--status-paused));
-    box-shadow: 0 0 8px hsl(var(--status-paused) / 0.6);
-  }
-  .status-dot-blocked {
-    background-color: hsl(var(--status-blocked));
-    box-shadow: 0 0 8px hsl(var(--status-blocked) / 0.6);
-  }
-  .status-dot-idle {
-    background-color: hsl(var(--status-idle));
-  }
+@layer components {
+  .stat-card { @apply px-4 py-3.5; }
+  .stat-label { @apply text-[10px] uppercase tracking-[0.15em] font-semibold; color: hsl(var(--muted-foreground)); }
+  .stat-value { @apply text-2xl font-bold font-mono mt-1 transition-all duration-300; }
+  .badge { @apply text-[10px] px-2.5 py-0.5 rounded-full font-semibold uppercase tracking-[0.12em] transition-all duration-300; }
+  .badge-warm { background: hsl(var(--status-warm) / 0.12); color: hsl(var(--status-warm)); border: 1px solid hsl(var(--status-warm) / 0.2); }
+  .badge-allocated { background: hsl(var(--status-allocated) / 0.12); color: hsl(var(--status-allocated)); border: 1px solid hsl(var(--status-allocated) / 0.2); }
+  .badge-booting { background: hsl(var(--status-booting) / 0.12); color: hsl(var(--status-booting)); border: 1px solid hsl(var(--status-booting) / 0.2); }
+  .badge-error { background: hsl(var(--status-error) / 0.12); color: hsl(var(--status-error)); border: 1px solid hsl(var(--status-error) / 0.2); }
+  .badge-offline { background: hsl(var(--surface-3)); color: hsl(var(--muted-foreground)); border: 1px solid hsl(var(--border)); }
+  .badge-leader { background: hsl(var(--status-booting) / 0.12); color: hsl(var(--status-booting)); border: 1px solid hsl(var(--status-booting) / 0.2); }
+  .badge-node { background: hsl(var(--surface-2)); color: hsl(var(--muted-foreground)); border: 1px solid hsl(var(--border)); }
+  .action-btn { @apply px-3 py-1.5 rounded-md text-[11px] font-semibold transition-all duration-150; }
+  .action-btn-primary { background: hsl(var(--primary) / 0.12); color: hsl(var(--primary)); border: 1px solid hsl(var(--primary) / 0.2); }
+  .action-btn-primary:hover { background: hsl(var(--primary) / 0.2); box-shadow: 0 0 12px -2px hsl(var(--primary) / 0.2); }
+  .action-btn-accent { background: hsl(var(--accent) / 0.12); color: hsl(var(--accent)); border: 1px solid hsl(var(--accent) / 0.2); }
+  .action-btn-accent:hover { background: hsl(var(--accent) / 0.2); }
+  .action-btn-danger { background: hsl(var(--destructive) / 0.12); color: hsl(var(--destructive)); border: 1px solid hsl(var(--destructive) / 0.2); }
+  .action-btn-danger:hover { background: hsl(var(--destructive) / 0.2); }
+  .action-btn-warning { background: hsl(var(--status-booting) / 0.12); color: hsl(var(--status-booting)); border: 1px solid hsl(var(--status-booting) / 0.2); }
+  .action-btn-warning:hover { background: hsl(var(--status-booting) / 0.2); }
+  .nav-link { @apply px-3 py-1.5 rounded-md text-[13px] font-medium transition-all duration-150 relative; color: hsl(var(--muted-foreground)); }
+  .nav-link:hover { color: hsl(var(--foreground)); background: hsl(var(--surface-2)); }
+  .nav-link-active { color: hsl(var(--primary)); background: hsl(var(--primary) / 0.08); }
+  .nav-link-active::after { content: ''; @apply absolute bottom-0 left-2 right-2 h-0.5 rounded-full; background: hsl(var(--primary)); box-shadow: 0 0 8px hsl(var(--primary) / 0.5); }
+  .section-card { @apply rounded-xl overflow-hidden; background: hsl(var(--surface-1)); border: 1px solid hsl(var(--border)); }
+  .section-header { @apply px-5 py-3 flex items-center justify-between; border-bottom: 1px solid hsl(var(--border)); }
+  .tab-btn { @apply px-4 py-2 text-sm font-medium border-b-2 transition-all duration-150 whitespace-nowrap; }
+  .tab-btn-active { border-color: hsl(var(--primary)); color: hsl(var(--primary)); }
+  .tab-btn-inactive { border-color: transparent; color: hsl(var(--muted-foreground)); }
+  .tab-btn-inactive:hover { color: hsl(var(--foreground)); }
 }

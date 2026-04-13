@@ -11,24 +11,15 @@ export function GridView() {
       try {
         const localPool = await api.pool();
         setPool(localPool);
-
-        // Also fetch peer pools for federated grid
         const fed = await api.federationStatus().catch(() => null);
         if (fed?.nodes) {
           const peerNodes = fed.nodes.filter((n: any) => n.role !== 'self' && n.healthy);
           const peerInstances: DeviceInstance[] = [];
           await Promise.all(peerNodes.map(async (n: any) => {
-            try {
-              const rp = await api.remotePool(n.host);
-              peerInstances.push(...(rp.instances || []));
-            } catch {}
+            try { const rp = await api.remotePool(n.host); peerInstances.push(...(rp.instances || [])); } catch {}
           }));
-          // Merge peer instances into pool for display
           if (peerInstances.length > 0) {
-            setPool(prev => prev ? {
-              ...prev,
-              instances: [...prev.instances, ...peerInstances],
-            } : prev);
+            setPool(prev => prev ? { ...prev, instances: [...prev.instances, ...peerInstances] } : prev);
           }
         }
       } catch {}
@@ -38,25 +29,29 @@ export function GridView() {
     return () => clearInterval(i);
   }, []);
 
-  if (!pool) return <div className="text-center py-20 text-gray-500">Loading...</div>;
+  if (!pool) return (
+    <div className="flex items-center justify-center py-20">
+      <div className="w-5 h-5 border-2 border-muted border-t-primary rounded-full animate-spin" />
+      <span className="ml-3 text-muted-foreground text-sm">Loading...</span>
+    </div>
+  );
 
   const liveInstances = pool.instances.filter(i => i.state === 'warm' || i.state === 'allocated');
 
   if (liveInstances.length === 0) {
     return (
-      <div className="text-center py-20">
-        <div className="text-gray-400 text-lg mb-2">No live devices</div>
-        <div className="text-gray-600 text-sm">Start an emulator from the Dashboard to see it here.</div>
+      <div className="text-center py-24 animate-fade-in">
+        <div className="text-foreground text-base mb-2">No live devices</div>
+        <div className="text-muted-foreground text-sm">Start an emulator from the Dashboard to see it here.</div>
       </div>
     );
   }
 
-  // Sort by device name so tiles don't hop around on refresh
   const sorted = [...liveInstances].sort((a, b) => a.device_name.localeCompare(b.device_name));
 
   return (
-    <div>
-      <div className="flex flex-wrap gap-4 justify-center">
+    <div className="animate-fade-in">
+      <div className="flex flex-wrap gap-5 justify-center">
         {sorted.map(inst => (
           <StreamTile key={inst.id} instance={inst} onClick={() => navigate(`/live/${inst.id}`)} />
         ))}
@@ -73,10 +68,8 @@ function StreamTile({ instance, onClick }: { instance: DeviceInstance; onClick: 
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws = new WebSocket(`${proto}//${window.location.host}/api/v1/sessions/${instance.id}/screen`);
     ws.binaryType = 'arraybuffer';
-
     ws.onopen = () => setConnected(true);
     ws.onclose = () => setConnected(false);
-
     ws.onmessage = (event) => {
       const blob = new Blob([event.data], { type: 'image/png' });
       const url = URL.createObjectURL(blob);
@@ -84,37 +77,31 @@ function StreamTile({ instance, onClick }: { instance: DeviceInstance; onClick: 
       img.onload = () => {
         const canvas = canvasRef.current;
         if (!canvas) return;
-        // Set canvas size once, then just redraw — prevents layout thrashing
-        if (canvas.width !== 320 || canvas.height !== 711) {
-          canvas.width = 320;
-          canvas.height = 711;
-        }
-        const ctx = canvas.getContext('2d');
-        if (ctx) ctx.drawImage(img, 0, 0, 320, 711);
+        if (canvas.width !== 320 || canvas.height !== 711) { canvas.width = 320; canvas.height = 711; }
+        canvas.getContext('2d')?.drawImage(img, 0, 0, 320, 711);
         URL.revokeObjectURL(url);
       };
       img.src = url;
     };
-
     return () => ws.close();
   }, [instance.id]);
 
   return (
     <div onClick={onClick} className="cursor-pointer group">
-      <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden hover:border-emerald-400/50 transition w-[320px] h-[711px] relative">
+      <div className="section-card overflow-hidden hover:border-primary/50 transition-all duration-200 w-[320px] h-[711px] relative">
         {!connected ? (
-          <div className="w-full h-full flex items-center justify-center bg-gray-950">
-            <div className="animate-spin w-5 h-5 border-2 border-gray-700 border-t-emerald-400 rounded-full" />
+          <div className="w-full h-full flex items-center justify-center surface-0">
+            <div className="w-5 h-5 border-2 border-muted border-t-primary rounded-full animate-spin" />
           </div>
         ) : (
           <canvas ref={canvasRef} className="w-full h-full object-cover" />
         )}
-        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition" />
+        <div className="absolute inset-0 bg-transparent group-hover:bg-black/10 transition" />
       </div>
-      <div className="mt-2 text-center">
+      <div className="mt-2.5 text-center">
         <div className="text-[11px] text-purple-400 font-mono">{instance.device_name}</div>
-        {instance.display_info && <div className="text-[9px] text-gray-500">{instance.display_info}</div>}
-        {instance.node_name && <div className="text-[9px] text-gray-600 font-mono">{instance.node_name}</div>}
+        {instance.display_info && <div className="text-[9px] text-muted-foreground">{instance.display_info}</div>}
+        {instance.node_name && <div className="text-[9px] text-muted-foreground/50 font-mono">{instance.node_name}</div>}
       </div>
     </div>
   );

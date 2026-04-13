@@ -1,0 +1,11 @@
+[    3116ms] [WARNING] [drizz-farm] Backend unreachable, using dummy data @ https://happy-dev-view.lovable.app/assets/index-DHcdjOMX.js:160
+[    3136ms] [WARNING] [drizz-farm] Backend unreachable, using dummy data @ https://happy-dev-view.lovable.app/assets/index-DHcdjOMX.js:160
+[    3137ms] [WARNING] [drizz-farm] Backend unreachable, using dummy data @ https://happy-dev-view.lovable.app/assets/index-DHcdjOMX.js:160
+[    3137ms] [WARNING] [drizz-farm] Backend unreachable, using dummy data @ https://happy-dev-view.lovable.app/assets/index-DHcdjOMX.js:160
+[  547378ms] [ERROR] WebSocket connection to 'wss://happy-dev-view.lovable.app/api/v1/sessions/inst-004/screen' failed: Error during WebSocket handshake: Unexpected response code: 200 @ https://happy-dev-view.lovable.app/assets/index-DHcdjOMX.js:163
+[  548068ms] [ERROR] WebSocket connection to 'wss://happy-dev-view.lovable.app/api/v1/sessions/inst-002/screen' failed: Error during WebSocket handshake: Unexpected response code: 200 @ https://happy-dev-view.lovable.app/assets/index-DHcdjOMX.js:163
+[  548553ms] [WARNING] WebSocket connection to 'wss://happy-dev-view.lovable.app/api/v1/sessions/rinst-003/screen' failed: WebSocket is closed before the connection is established. @ https://happy-dev-view.lovable.app/assets/index-DHcdjOMX.js:163
+[  548553ms] [WARNING] WebSocket connection to 'wss://happy-dev-view.lovable.app/api/v1/sessions/rinst-002/screen' failed: WebSocket is closed before the connection is established. @ https://happy-dev-view.lovable.app/assets/index-DHcdjOMX.js:163
+[  548553ms] [WARNING] WebSocket connection to 'wss://happy-dev-view.lovable.app/api/v1/sessions/inst-001/screen' failed: WebSocket is closed before the connection is established. @ https://happy-dev-view.lovable.app/assets/index-DHcdjOMX.js:163
+[  548553ms] [WARNING] WebSocket connection to 'wss://happy-dev-view.lovable.app/api/v1/sessions/rinst-001/screen' failed: WebSocket is closed before the connection is established. @ https://happy-dev-view.lovable.app/assets/index-DHcdjOMX.js:163
+[  548553ms] [WARNING] WebSocket connection to 'wss://happy-dev-view.lovable.app/api/v1/sessions/inst-005/screen' failed: WebSocket is closed before the connection is established. @ https://happy-dev-view.lovable.app/assets/index-DHcdjOMX.js:163

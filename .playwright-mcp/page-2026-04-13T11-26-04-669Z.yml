@@ -1,0 +1,23 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e3]:
+    - navigation [ref=e4]:
+      - generic [ref=e5]:
+        - generic [ref=e6]: drizz-farm
+        - generic [ref=e7]:
+          - link "Dashboard" [ref=e8] [cursor=pointer]:
+            - /url: /
+          - link "Live Grid" [ref=e9] [cursor=pointer]:
+            - /url: /grid
+          - link "Sessions" [ref=e10] [cursor=pointer]:
+            - /url: /sessions
+          - link "Settings" [ref=e11] [cursor=pointer]:
+            - /url: /settings
+    - main [ref=e12]:
+      - generic [ref=e15]: Connecting...
+  - complementary "Edit with Lovable" [ref=e16]:
+    - link "Edit with Lovable" [ref=e17] [cursor=pointer]:
+      - /url: https://lovable.dev/projects/0197de2e-4843-4bcf-b214-6381e59b9a8a?utm_source=lovable-badge
+      - generic [ref=e18]: Edit with
+      - img [ref=e19]
+    - button "Dismiss" [ref=e24] [cursor=pointer]:
+      - img [ref=e25]
