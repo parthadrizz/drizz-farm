@@ -11,6 +11,7 @@ type DeviceInstance struct {
 
 	ID           string      `json:"id"`
 	NodeName     string      `json:"node_name"`
+	DisplayInfo  string      `json:"display_info"` // "Pixel 7 · Android 14 · Play Store · API 34"
 	ProfileName  string      `json:"profile"`
 	State        DeviceState `json:"state"`
 	SessionID    string      `json:"session_id,omitempty"`
@@ -117,6 +118,7 @@ func (d *DeviceInstance) Snapshot() InstanceSnapshot {
 	if d.Device != nil {
 		snap.DeviceKind = d.Device.Kind()
 		snap.DeviceName = d.Device.DisplayName()
+		snap.DisplayInfo = d.DisplayInfo
 		snap.Serial = d.Device.Serial()
 		snap.Connection = d.Device.GetConnectionInfo()
 	}
@@ -130,6 +132,7 @@ type InstanceSnapshot struct {
 	NodeName     string         `json:"node_name"`
 	DeviceKind   DeviceKind     `json:"device_kind"`
 	DeviceName   string         `json:"device_name"`
+	DisplayInfo  string         `json:"display_info"` // e.g. "Pixel 7 · Android 14 · Play Store · API 34"
 	ProfileName  string         `json:"profile"`
 	State        DeviceState    `json:"state"`
 	Serial       string         `json:"serial"`

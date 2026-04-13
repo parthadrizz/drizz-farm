@@ -448,8 +448,13 @@ func (p *Pool) bootEmulator(ctx context.Context, avdName string, profileName str
 		Visible:   p.cfg.Pool.VisibleEmulators,
 	})
 
-	// Create instance
+	// Create instance with enriched display info
 	inst := p.createInstance(dev, profileName)
+
+	// Enrich display info from AVD config
+	avdInfo := android.AVDInfo{Name: avdName}
+	android.EnrichAVDInfo(&avdInfo)
+	inst.DisplayInfo = avdInfo.DisplayName
 
 	// Boot
 	if err := inst.TransitionTo(StateBooting); err != nil {

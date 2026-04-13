@@ -15,6 +15,7 @@ export interface DeviceInstance {
   id: string;
   node_name: string;
   device_kind: string;
+  display_info: string;
   device_name: string;
   profile: string;
   state: string;

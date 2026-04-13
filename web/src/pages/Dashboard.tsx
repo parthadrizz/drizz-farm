@@ -349,6 +349,7 @@ function NodeDeviceList({
             <div className={`w-2 h-2 rounded-full flex-shrink-0 ${stateColor[state] || 'bg-gray-600'}`} />
             <div className="flex-1 min-w-0">
               <div className="text-xs font-medium text-gray-200 truncate">{name}</div>
+              {inst?.display_info && <div className="text-[10px] text-purple-400/70 truncate">{inst.display_info}</div>}
               <div className="text-[10px] text-gray-600">
                 {inst ? `${inst.node_name ? inst.node_name + ':' : ''}${inst.serial} · port:${inst.connection?.adb_port || '-'}` : 'offline'}
               </div>

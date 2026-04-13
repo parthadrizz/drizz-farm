@@ -1,19 +1,29 @@
 package android
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/drizz-dev/drizz-farm/internal/config"
 )
 
-// AVDInfo holds metadata about an existing AVD.
+// AVDInfo holds metadata about an existing AVD, enriched from config files.
 type AVDInfo struct {
-	Name   string
-	Device string
-	Path   string
-	Target string
+	Name         string `json:"name"`
+	Device       string `json:"device"`        // e.g. "pixel_7"
+	DeviceModel  string `json:"device_model"`  // e.g. "Pixel 7"
+	Manufacturer string `json:"manufacturer"`  // e.g. "Google"
+	APILevel     string `json:"api_level"`     // e.g. "34"
+	AndroidVer   string `json:"android_ver"`   // e.g. "14"
+	Variant      string `json:"variant"`       // e.g. "google_apis_playstore"
+	Arch         string `json:"arch"`          // e.g. "arm64-v8a"
+	DisplayName  string `json:"display_name"`  // e.g. "Pixel 7 · Android 14 · Play Store"
+	Path         string `json:"path,omitempty"`
+	Target       string `json:"target,omitempty"`
 }
 
 // AVDManager wraps avdmanager commands.
@@ -85,10 +95,133 @@ func (m *AVDManager) List(ctx context.Context) ([]AVDInfo, error) {
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		name := strings.TrimSpace(line)
 		if name != "" {
-			avds = append(avds, AVDInfo{Name: name})
+			info := AVDInfo{Name: name}
+			EnrichAVDInfo(&info)
+			avds = append(avds, info)
 		}
 	}
 	return avds, nil
+}
+
+// EnrichAVDInfo reads the AVD's config.ini to extract device model, API level, variant.
+func EnrichAVDInfo(info *AVDInfo) {
+	home, _ := os.UserHomeDir()
+	configPath := filepath.Join(home, ".android", "avd", info.Name+".avd", "config.ini")
+
+	f, err := os.Open(configPath)
+	if err != nil {
+		info.DisplayName = info.Name
+		return
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		val := strings.TrimSpace(parts[1])
+
+		switch key {
+		case "hw.device.name":
+			info.Device = val
+		case "hw.device.manufacturer":
+			info.Manufacturer = val
+		case "image.sysdir.1":
+			// Parse: system-images/android-34-ext8/google_apis_playstore/arm64-v8a/
+			segments := strings.Split(strings.TrimSuffix(val, "/"), "/")
+			for _, seg := range segments {
+				if strings.HasPrefix(seg, "android-") {
+					info.APILevel = strings.TrimPrefix(seg, "android-")
+					// Strip extension suffixes like "-ext8"
+					base := info.APILevel
+					if idx := strings.Index(base, "-"); idx > 0 {
+						base = base[:idx]
+					}
+					info.AndroidVer = apiToAndroid(base)
+				}
+				if strings.Contains(seg, "google_apis") || strings.Contains(seg, "default") {
+					info.Variant = seg
+				}
+				if strings.Contains(seg, "arm64") || strings.Contains(seg, "x86") {
+					info.Arch = seg
+				}
+			}
+		}
+	}
+
+	// Build human-friendly model name
+	info.DeviceModel = prettifyDevice(info.Device)
+
+	// Build display name: "Pixel 7 · Android 14 · Play Store · API 34"
+	parts := []string{}
+	if info.DeviceModel != "" {
+		parts = append(parts, info.DeviceModel)
+	}
+	if info.AndroidVer != "" {
+		parts = append(parts, "Android "+info.AndroidVer)
+	}
+	if info.Variant != "" {
+		parts = append(parts, prettifyVariant(info.Variant))
+	}
+	if info.APILevel != "" {
+		parts = append(parts, "API "+info.APILevel)
+	}
+	if len(parts) > 0 {
+		info.DisplayName = strings.Join(parts, " · ")
+	} else {
+		info.DisplayName = info.Name
+	}
+}
+
+// apiToAndroid maps API level to Android version.
+func apiToAndroid(api string) string {
+	m := map[string]string{
+		"35": "15", "34": "14", "33": "13", "32": "12L", "31": "12",
+		"30": "11", "29": "10", "28": "9", "27": "8.1", "26": "8.0",
+		"25": "7.1", "24": "7.0", "23": "6.0", "22": "5.1", "21": "5.0",
+	}
+	if v, ok := m[api]; ok {
+		return v
+	}
+	return api
+}
+
+// prettifyDevice converts device IDs to readable names.
+func prettifyDevice(device string) string {
+	m := map[string]string{
+		"pixel":   "Pixel", "pixel_2": "Pixel 2", "pixel_3": "Pixel 3",
+		"pixel_4": "Pixel 4", "pixel_5": "Pixel 5", "pixel_6": "Pixel 6",
+		"pixel_7": "Pixel 7", "pixel_7_pro": "Pixel 7 Pro",
+		"pixel_8": "Pixel 8", "pixel_8_pro": "Pixel 8 Pro",
+		"pixel_9": "Pixel 9", "pixel_fold": "Pixel Fold",
+		"pixel_tablet": "Pixel Tablet",
+		"Nexus 5X": "Nexus 5X", "Nexus 6P": "Nexus 6P",
+		"medium_phone": "Medium Phone", "small_phone": "Small Phone",
+		"medium_tablet": "Medium Tablet",
+	}
+	if v, ok := m[device]; ok {
+		return v
+	}
+	// Capitalize and replace underscores
+	return strings.ReplaceAll(strings.Title(strings.ReplaceAll(device, "_", " ")), "  ", " ")
+}
+
+// prettifyVariant converts variant IDs to readable names.
+func prettifyVariant(variant string) string {
+	m := map[string]string{
+		"google_apis_playstore": "Play Store",
+		"google_apis":           "Google APIs",
+		"default":               "AOSP",
+		"google_atd":            "ATD",
+	}
+	if v, ok := m[variant]; ok {
+		return v
+	}
+	return variant
 }
 
 // Exists checks if an AVD with the given name exists.

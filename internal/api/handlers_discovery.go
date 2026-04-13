@@ -24,7 +24,12 @@ type systemImageResponse struct {
 }
 
 type avdResponse struct {
-	Name string `json:"name"`
+	Name         string `json:"name"`
+	DisplayName  string `json:"display_name"`
+	DeviceModel  string `json:"device_model"`
+	AndroidVer   string `json:"android_ver"`
+	APILevel     string `json:"api_level"`
+	Variant      string `json:"variant"`
 }
 
 // SystemImages handles GET /api/v1/discovery/system-images
@@ -68,7 +73,11 @@ func (h *discoveryHandlers) AVDs(w http.ResponseWriter, r *http.Request) {
 
 	resp := make([]avdResponse, 0, len(avds))
 	for _, avd := range avds {
-		resp = append(resp, avdResponse{Name: avd.Name})
+		resp = append(resp, avdResponse{
+			Name: avd.Name, DisplayName: avd.DisplayName,
+			DeviceModel: avd.DeviceModel, AndroidVer: avd.AndroidVer,
+			APILevel: avd.APILevel, Variant: avd.Variant,
+		})
 	}
 	JSON(w, http.StatusOK, map[string]any{"avds": resp})
 }
