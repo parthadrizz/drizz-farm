@@ -202,7 +202,12 @@
       "Bash(grep -o \"text-foreground\\\\|text-primary\\\\|text-muted-foreground\\\\|bg-background\\\\|text-accent\\\\|text-destructive\\\\|border-border\" /Users/humblefool2909/drizz-farm/web/dist/assets/index-*.css)",
       "Bash(grep -A1 \"text-foreground\" /Users/humblefool2909/drizz-farm/web/dist/assets/index-*.css)",
       "WebFetch(domain:happy-dev-view.lovable.app)",
-      "mcp__playwright__browser_snapshot"
+      "mcp__playwright__browser_snapshot",
+      "Bash(curl -s http://172.16.12.248:9401/api/v1/pool)",
+      "Bash(curl -s http://172.16.13.6:9401/api/v1/pool)",
+      "Bash(timeout 3 dns-sd -B _drizz-farm._tcp local.)",
+      "Bash(curl -s http://localhost:9401/api/v1/federation/status)",
+      "WebFetch(domain:android-developers.googleblog.com)"
     ]
   }
 }

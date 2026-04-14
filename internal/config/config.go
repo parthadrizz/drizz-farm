@@ -12,6 +12,7 @@ import (
 type Config struct {
 	Node        NodeConfig        `yaml:"node"        mapstructure:"node"`
 	Mesh        MeshConfig        `yaml:"mesh"        mapstructure:"mesh"`
+	SDK         SDKPaths          `yaml:"sdk"         mapstructure:"sdk"`
 	Pool        PoolConfig        `yaml:"pool"        mapstructure:"pool"`
 	API         APIConfig         `yaml:"api"         mapstructure:"api"`
 	Network     NetworkConfig     `yaml:"network"     mapstructure:"network"`
@@ -20,6 +21,17 @@ type Config struct {
 	Artifacts   ArtifactsConfig   `yaml:"artifacts"   mapstructure:"artifacts"`
 	Webhooks    []WebhookConfig    `yaml:"webhooks"    mapstructure:"webhooks"`
 	License     LicenseConfig     `yaml:"license"     mapstructure:"license"`
+}
+
+// SDKPaths stores resolved paths to Android SDK tools.
+// Detected once during setup, stored in config, never searched again.
+type SDKPaths struct {
+	Root       string `yaml:"root"        mapstructure:"root"`
+	ADB        string `yaml:"adb"         mapstructure:"adb"`
+	AVDManager string `yaml:"avdmanager"  mapstructure:"avdmanager"`
+	SDKManager string `yaml:"sdkmanager"  mapstructure:"sdkmanager"`
+	Emulator   string `yaml:"emulator"    mapstructure:"emulator"`
+	Java       string `yaml:"java"        mapstructure:"java"`
 }
 
 // MeshConfig controls multi-node mesh networking.

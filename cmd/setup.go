@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -59,22 +60,27 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	fmt.Println("  Checking prerequisites...")
 	fmt.Println()
 
-	checks := []checkResult{
-		checkBrew(),
+	// Ordered by dependency — each step depends on the previous
+	// Brew → Java → SDK → cmdline-tools → platform-tools → emulator
+	required := []checkResult{
+		checkPkgMgr(),
 		checkJDK(),
 		checkAndroidSDK(),
 		checkAndroidCmdlineTools(),
 		checkAndroidPlatformTools(),
 		checkAndroidEmulator(),
+	}
+	// Optional — nice to have
+	optional := []checkResult{
 		checkAndroidSystemImages(),
 	}
 	if runtime.GOOS == "darwin" {
-		checks = append(checks, checkXcodeCLI())
+		optional = append(optional, checkXcodeCLI())
 	}
 
 	allOK := true
 	var failures []checkResult
-	for _, c := range checks {
+	for _, c := range required {
 		if c.ok {
 			fmt.Printf("  ✓ %-28s %s\n", c.name, c.detail)
 		} else {
@@ -83,11 +89,18 @@ func runSetup(cmd *cobra.Command, args []string) error {
 			failures = append(failures, c)
 		}
 	}
+	for _, c := range optional {
+		if c.ok {
+			fmt.Printf("  ✓ %-28s %s\n", c.name, c.detail)
+		} else {
+			fmt.Printf("  ○ %-28s %s (optional)\n", c.name, c.detail)
+		}
+	}
 
 	fmt.Println()
 	printHardwareCapacity()
 
-	if !allOK && setupAutoInstall {
+	if !allOK {
 		fmt.Println("\n  Installing missing prerequisites...")
 		for _, f := range failures {
 			if f.fixCmd == "" {
@@ -95,16 +108,33 @@ func runSetup(cmd *cobra.Command, args []string) error {
 				continue
 			}
 			fmt.Printf("  → Installing %s...\n", f.name)
-			parts := strings.Fields(f.fixCmd)
-			out, err := exec.Command(parts[0], parts[1:]...).CombinedOutput()
+			// Use sh -c to handle quoted args properly
+			out, err := exec.Command("sh", "-c", f.fixCmd).CombinedOutput()
 			if err != nil {
 				fmt.Printf("    FAILED: %s\n    %s\n", err, strings.TrimSpace(string(out)))
 			} else {
 				fmt.Printf("    ✓ Done\n")
 			}
 		}
-	} else if !allOK {
-		fmt.Printf("\n  %d prerequisite(s) missing. Run: drizz-farm setup --install\n", len(failures))
+		// Re-check after install
+		fmt.Println("\n  Re-checking...")
+		recheck := []checkResult{
+			checkBrew(), checkJDK(), checkAndroidSDK(),
+			checkAndroidCmdlineTools(), checkAndroidPlatformTools(),
+			checkAndroidEmulator(), checkAndroidSystemImages(),
+		}
+		stillFailing := 0
+		for _, c := range recheck {
+			if !c.ok {
+				stillFailing++
+				fmt.Printf("  ✗ %-28s %s\n", c.name, c.detail)
+			}
+		}
+		if stillFailing > 0 {
+			fmt.Printf("\n  %d prerequisite(s) still missing. Fix manually and run setup again.\n", stillFailing)
+		} else {
+			fmt.Println("  ✓ All prerequisites installed")
+		}
 	}
 
 	// --- Step 3: Save Config ---
@@ -133,9 +163,22 @@ func setupMesh(reader *bufio.Reader) (string, string, error) {
 	meshes := discoverMeshes()
 
 	if len(meshes) == 0 {
-		fmt.Println("     No meshes found.")
+		fmt.Println("     No other nodes found on LAN.")
 		fmt.Println()
-		return createNewMesh(reader)
+		fmt.Println("  1. Start fresh (new device lab)")
+		fmt.Println("  2. Join existing node")
+		fmt.Println()
+		fmt.Print("  → Choice: ")
+		c, _ := reader.ReadString('\n')
+		c = strings.TrimSpace(c)
+		if c == "2" {
+			return joinByAddress(reader)
+		}
+		// Start fresh — auto-generate mesh silently, no questions
+		hostname, _ := os.Hostname()
+		key := generateMeshKey()
+		fmt.Printf("\n  ✓ Node configured\n")
+		return hostname, key, nil
 	}
 
 	// Show discovered meshes
@@ -149,27 +192,28 @@ func setupMesh(reader *bufio.Reader) (string, string, error) {
 	for i, m := range meshes {
 		fmt.Printf("  %d. Join \"%s\"\n", i+1, m.name)
 	}
-	fmt.Printf("  %d. Create new mesh\n", len(meshes)+1)
+	fmt.Printf("  %d. Join by address\n", len(meshes)+1)
+	fmt.Printf("  %d. Create new mesh\n", len(meshes)+2)
 	fmt.Println()
 
-	fmt.Print("  → Choice: ")
-	choiceStr, _ := reader.ReadString('\n')
-	choiceStr = strings.TrimSpace(choiceStr)
+	for {
+		fmt.Print("  → Choice: ")
+		choiceStr, _ := reader.ReadString('\n')
+		choiceStr = strings.TrimSpace(choiceStr)
+		choice := 0
+		fmt.Sscanf(choiceStr, "%d", &choice)
 
-	choice := 0
-	fmt.Sscanf(choiceStr, "%d", &choice)
-
-	if choice < 1 || choice > len(meshes)+1 {
-		choice = len(meshes) + 1 // default to create new
+		if choice == len(meshes)+1 {
+			return joinByAddress(reader)
+		}
+		if choice == len(meshes)+2 {
+			return createNewMesh(reader)
+		}
+		if choice >= 1 && choice <= len(meshes) {
+			return joinExistingMesh(reader, meshes[choice-1])
+		}
+		fmt.Println("  Invalid choice, try again.")
 	}
-
-	if choice == len(meshes)+1 {
-		return createNewMesh(reader)
-	}
-
-	// Join existing mesh
-	selected := meshes[choice-1]
-	return joinExistingMesh(reader, selected)
 }
 
 type discoveredMesh struct {
@@ -215,6 +259,61 @@ func discoverMeshes() []discoveredMesh {
 	}
 
 	return meshes
+}
+
+func joinByAddress(reader *bufio.Reader) (string, string, error) {
+	fmt.Print("  → Node address (hostname or IP, e.g. mac-mini.local:9401 or 192.168.1.10:9401): ")
+	addr, _ := reader.ReadString('\n')
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return "", "", fmt.Errorf("address is required")
+	}
+	// Add default port if not specified
+	if !strings.Contains(addr, ":") {
+		addr = addr + ":9401"
+	}
+
+	// Fetch mesh info from the remote node
+	fmt.Printf("  → Connecting to %s...\n", addr)
+	cmd := exec.Command("curl", "-sf", "--max-time", "5", fmt.Sprintf("http://%s/api/v1/node/health", addr))
+	out, err := cmd.Output()
+	if err != nil {
+		return "", "", fmt.Errorf("cannot reach %s — is drizz-farm running there?", addr)
+	}
+
+	// Parse mesh name from health response
+	var health map[string]any
+	if err := json.Unmarshal(out, &health); err != nil {
+		return "", "", fmt.Errorf("invalid response from %s", addr)
+	}
+	meshInfo, _ := health["mesh"].(map[string]any)
+	remoteMeshName := ""
+	if meshInfo != nil {
+		remoteMeshName, _ = meshInfo["name"].(string)
+	}
+	remoteNode, _ := health["node"].(string)
+
+	if remoteMeshName == "" {
+		remoteMeshName = remoteNode
+	}
+
+	fmt.Printf("  ✓ Found mesh \"%s\" on %s\n", remoteMeshName, remoteNode)
+	fmt.Println()
+
+	fmt.Printf("  → Mesh key for \"%s\": ", remoteMeshName)
+	key, _ := reader.ReadString('\n')
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return "", "", fmt.Errorf("mesh key is required")
+	}
+
+	// Verify key via handshake
+	if !verifyMeshKey(addr, key) {
+		return "", "", fmt.Errorf("invalid mesh key — handshake failed")
+	}
+
+	fmt.Printf("  ✓ Handshake successful — joined \"%s\"\n", remoteMeshName)
+	return remoteMeshName, key, nil
 }
 
 func createNewMesh(reader *bufio.Reader) (string, string, error) {
@@ -294,7 +393,7 @@ func joinExistingMesh(reader *bufio.Reader, mesh discoveredMesh) (string, string
 
 func verifyMeshKey(nodeAddr, key string) bool {
 	body := fmt.Sprintf(`{"mesh_key":"%s"}`, key)
-	cmd := exec.Command("curl", "-sf", "-X", "POST",
+	cmd := exec.Command("curl", "-sf", "--max-time", "5", "-X", "POST",
 		fmt.Sprintf("http://%s/api/v1/federation/handshake", nodeAddr),
 		"-H", "Content-Type: application/json",
 		"-d", body)
@@ -327,7 +426,9 @@ func importConfigFromPeer(node discovery.Node) error {
 
 func generateMeshKey() string {
 	b := make([]byte, 12)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		panic("rand.Read failed: " + err.Error())
+	}
 	return hex.EncodeToString(b)
 }
 
@@ -346,6 +447,46 @@ func saveSetupConfig(meshName, meshKey string) error {
 	// Apply mesh settings
 	cfg.Mesh.Name = meshName
 	cfg.Mesh.Key = meshKey
+
+	// Detect and store SDK paths — done ONCE, used everywhere
+	//
+	// Order matters: Java → JAVA_HOME → then SDK tools (they need Java)
+	// Each tool: find → verify it runs → if broken, install → verify again
+
+	// Step 1: Java (everything depends on this)
+	javac := findBinary("javac")
+	if javac != "" {
+		cfg.SDK.Java = filepath.Join(filepath.Dir(javac), "java")
+		if _, err := os.Stat(cfg.SDK.Java); err != nil {
+			cfg.SDK.Java = findBinary("java")
+		}
+	} else {
+		cfg.SDK.Java = findBinary("java")
+	}
+	if cfg.SDK.Java != "" {
+		javaHome := filepath.Dir(filepath.Dir(cfg.SDK.Java))
+		os.Setenv("JAVA_HOME", javaHome)
+		fmt.Printf("  → JAVA_HOME=%s\n", javaHome)
+	}
+
+	// Step 2: SDK root + tools that DON'T need Java (adb, emulator)
+	cfg.SDK.Root = findAndroidSDK()
+	cfg.SDK.ADB = findBinary("adb")
+	cfg.SDK.Emulator = findBinary("emulator")
+
+	// Step 3: Tools that NEED Java (avdmanager, sdkmanager)
+	// Only verify these if Java is available
+	if cfg.SDK.Java != "" {
+		cfg.SDK.AVDManager = findAndVerify("avdmanager")
+		cfg.SDK.SDKManager = findAndVerify("sdkmanager")
+	} else {
+		// Just find them (file exists), can't verify without Java
+		cfg.SDK.AVDManager = findBinaryNoInstall("avdmanager")
+		cfg.SDK.SDKManager = findBinaryNoInstall("sdkmanager")
+		if cfg.SDK.AVDManager != "" || cfg.SDK.SDKManager != "" {
+			fmt.Println("  ⚠ avdmanager/sdkmanager found but can't verify (Java missing)")
+		}
+	}
 
 	// Apply defaults for empty fields
 	if cfg.Pool.MaxConcurrent == 0 {
@@ -401,6 +542,22 @@ type checkResult struct {
 	fixCmd string
 }
 
+func checkPkgMgr() checkResult {
+	switch runtime.GOOS {
+	case "darwin":
+		return checkBrew()
+	case "linux":
+		for _, pm := range []string{"apt-get", "dnf", "yum", "pacman"} {
+			if p, err := exec.LookPath(pm); err == nil {
+				return checkResult{name: "Package manager", ok: true, path: p, detail: pm}
+			}
+		}
+		return checkResult{name: "Package manager", detail: "none found (need apt/dnf/yum/pacman)"}
+	default:
+		return checkResult{name: "Package manager", detail: "unsupported OS"}
+	}
+}
+
 func checkBrew() checkResult {
 	r := checkResult{name: "Homebrew"}
 	path, err := exec.LookPath("brew")
@@ -417,25 +574,19 @@ func checkBrew() checkResult {
 
 func checkJDK() checkResult {
 	r := checkResult{name: "Java JDK"}
-	if javaHome := os.Getenv("JAVA_HOME"); javaHome != "" {
-		javac := filepath.Join(javaHome, "bin", "javac")
-		if _, err := os.Stat(javac); err == nil {
-			r.ok = true
-			r.path = javaHome
-			r.detail = fmt.Sprintf("JAVA_HOME=%s", javaHome)
-			return r
-		}
-	}
-	path, err := exec.LookPath("javac")
-	if err != nil {
-		r.detail = "not found (needed for Android SDK tools)"
-		r.fixCmd = "brew install openjdk"
+	p := findBinary("javac")
+	if p == "" {
+		r.detail = "not found"
 		return r
 	}
-	out, _ := exec.Command("javac", "-version").CombinedOutput()
+	out, err := exec.Command(p, "-version").CombinedOutput()
+	if err != nil {
+		r.detail = fmt.Sprintf("broken (%s)", p)
+		return r
+	}
 	r.ok = true
-	r.path = path
-	r.detail = strings.TrimSpace(string(out))
+	r.path = p
+	r.detail = fmt.Sprintf("%s (%s)", strings.TrimSpace(string(out)), p)
 	return r
 }
 
@@ -453,41 +604,263 @@ func checkAndroidSDK() checkResult {
 	return r
 }
 
+// needsRunVerification lists binaries known to have macOS stubs that look real but aren't.
+// verifyBinaryWorks checks if a binary actually works.
+// Only java/javac need runtime verification (macOS stubs).
+// Everything else — file exists = good enough.
+func verifyBinaryWorks(path string) bool {
+	name := filepath.Base(path)
+	if name != "java" && name != "javac" {
+		return true
+	}
+	// Java/javac: run to catch macOS stubs
+	for _, flag := range []string{"-version", "--version"} {
+		cmd := exec.Command(path, flag)
+		if err := cmd.Run(); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// appendJavaHome adds JAVA_HOME to env if we've already found java.
+// This is needed because sdkmanager/avdmanager scripts look for JAVA_HOME.
+func appendJavaHome(env []string) []string {
+	// Check if already set
+	for _, e := range env {
+		if strings.HasPrefix(e, "JAVA_HOME=") {
+			return env
+		}
+	}
+	// Find java binary and derive JAVA_HOME
+	javaPath := findBinaryNoInstall("java")
+	if javaPath == "" {
+		return env
+	}
+	// java is at <java_home>/bin/java
+	javaHome := filepath.Dir(filepath.Dir(javaPath))
+	return append(env, "JAVA_HOME="+javaHome)
+}
+
+// findBinaryNoInstall searches for a binary without attempting to install.
+func findBinaryNoInstall(name string) string {
+	if p, err := exec.LookPath(name); err == nil {
+		if name == "java" || name == "javac" {
+			// Verify it's not a macOS stub
+			cmd := exec.Command(p, "-version")
+			if err := cmd.Run(); err != nil {
+				// Stub — skip
+			} else {
+				return p
+			}
+		} else {
+			return p
+		}
+	}
+	for _, p := range commonSearchPaths(name) {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return ""
+}
+
+// envForBinary maps binary names to the env var that should point to their parent.
+var envForBinary = map[string]string{
+	"adb":        "ANDROID_HOME",
+	"emulator":   "ANDROID_HOME",
+	"avdmanager": "ANDROID_HOME",
+	"sdkmanager": "ANDROID_HOME",
+	"javac":      "JAVA_HOME",
+	"java":       "JAVA_HOME",
+}
+
+// installCmdForBinary maps binary names to the brew install command.
+var installCmdForBinary = map[string]string{
+	"adb":        "brew install --cask android-platform-tools",
+	"emulator":   "brew install --cask android-commandlinetools && sdkmanager --install emulator",
+	"avdmanager": "brew install --cask android-commandlinetools",
+	"sdkmanager": "brew install --cask android-commandlinetools",
+	"javac":      "brew install --cask temurin || brew install openjdk",
+	"java":       "brew install --cask temurin || brew install openjdk",
+	"brew":       `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`,
+}
+
+var alreadyInstalled = map[string]bool{}
+
+// findAndVerify finds a binary, runs it to verify, installs if broken.
+func findAndVerify(name string) string {
+	// Find it
+	p := findBinaryNoInstall(name)
+	if p == "" {
+		// Not found → install
+		return findBinary(name)
+	}
+	// Found → verify it actually runs (with JAVA_HOME available)
+	cmd := exec.Command(p, "--version")
+	cmd.Env = appendJavaHome(os.Environ())
+	if err := cmd.Run(); err != nil {
+		// Try -version
+		cmd2 := exec.Command(p, "-version")
+		cmd2.Env = appendJavaHome(os.Environ())
+		if err2 := cmd2.Run(); err2 != nil {
+			// Found but broken → reinstall
+			fmt.Printf("  ⚠ %s found at %s but broken — reinstalling\n", name, p)
+			alreadyInstalled[name] = false // allow reinstall
+			return findBinary(name)
+		}
+	}
+	return p
+}
+
+// findBinary finds a binary by:
+// 1. Checking the relevant env var (ANDROID_HOME, JAVA_HOME, etc.)
+// 2. Checking PATH
+// 3. Searching common locations
+// If not found, installs it (once) and searches again.
+func findBinary(name string) string {
+	// 1. Check env var
+	if envVar, ok := envForBinary[name]; ok {
+		if root := os.Getenv(envVar); root != "" {
+			// Derive binary path from env root
+			candidates := binaryPathsFromRoot(root, name)
+			for _, p := range candidates {
+				if _, err := os.Stat(p); err == nil {
+					return p
+				}
+			}
+		}
+	}
+
+	// 2. Check PATH — verify it actually runs
+	if p, err := exec.LookPath(name); err == nil {
+		if verifyBinaryWorks(p) {
+			return p
+		}
+	}
+
+	// 3. Search common locations — verify each one works
+	for _, p := range commonSearchPaths(name) {
+		if _, err := os.Stat(p); err == nil {
+			if verifyBinaryWorks(p) {
+				return p
+			}
+		}
+	}
+
+	// 4. Not found — try to install ONCE (stream output in real time)
+	if cmd, ok := installCmdForBinary[name]; ok && !alreadyInstalled[name] {
+		alreadyInstalled[name] = true
+		fmt.Printf("  → %s not found. Installing...\n", name)
+		installCmd := exec.Command("sh", "-c", cmd)
+		installCmd.Stdout = os.Stdout
+		installCmd.Stderr = os.Stderr
+		err := installCmd.Run()
+		if err != nil {
+			fmt.Printf("    ✗ Install failed. Install manually:\n    %s\n", cmd)
+			return ""
+		}
+		fmt.Printf("    ✓ %s installed\n", name)
+
+		// Search again after install
+		if p, err := exec.LookPath(name); err == nil {
+			if verifyBinaryWorks(p) { return p }
+		}
+		for _, p := range commonSearchPaths(name) {
+			if _, err := os.Stat(p); err == nil {
+				if verifyBinaryWorks(p) { return p }
+			}
+		}
+	}
+
+	return ""
+}
+
+// binaryPathsFromRoot returns candidate paths for a binary given a root dir.
+func binaryPathsFromRoot(root, name string) []string {
+	paths := []string{
+		filepath.Join(root, "bin", name),
+		filepath.Join(root, "platform-tools", name),
+		filepath.Join(root, "emulator", name),
+		filepath.Join(root, "cmdline-tools", "latest", "bin", name),
+	}
+	// Check versioned cmdline-tools
+	entries, _ := os.ReadDir(filepath.Join(root, "cmdline-tools"))
+	for _, e := range entries {
+		if e.IsDir() {
+			paths = append(paths, filepath.Join(root, "cmdline-tools", e.Name(), "bin", name))
+		}
+	}
+	return paths
+}
+
+// commonSearchPaths returns all common locations to search for a binary.
+func commonSearchPaths(name string) []string {
+	home, _ := os.UserHomeDir()
+	sdkRoots := []string{
+		filepath.Join(home, "Library", "Android", "sdk"),
+		"/Library/Android/sdk",
+		"/opt/android-sdk",
+	}
+
+	var paths []string
+	for _, sdk := range sdkRoots {
+		paths = append(paths, binaryPathsFromRoot(sdk, name)...)
+	}
+
+	// Brew locations
+	paths = append(paths,
+		filepath.Join("/opt/homebrew/bin", name),
+		filepath.Join("/usr/local/bin", name),
+		filepath.Join("/opt/homebrew/share/android-commandlinetools/cmdline-tools/latest/bin", name),
+		filepath.Join("/opt/homebrew/Caskroom/android-commandlinetools/latest/cmdline-tools/latest/bin", name),
+	)
+
+	// Java-specific
+	if name == "javac" || name == "java" {
+		paths = append(paths,
+			filepath.Join("/opt/homebrew/opt/openjdk/bin", name),
+			filepath.Join("/usr/local/opt/openjdk/bin", name),
+			filepath.Join("/Library/Java/JavaVirtualMachines/openjdk.jdk/Contents/Home/bin", name),
+		)
+		// Search all JVMs
+		jvmDir := "/Library/Java/JavaVirtualMachines"
+		entries, _ := os.ReadDir(jvmDir)
+		for _, e := range entries {
+			if e.IsDir() {
+				paths = append(paths, filepath.Join(jvmDir, e.Name(), "Contents", "Home", "bin", name))
+			}
+		}
+	}
+
+	return paths
+}
+
+
 func checkAndroidCmdlineTools() checkResult {
 	r := checkResult{name: "Android cmdline-tools"}
-	sdkRoot := findAndroidSDK()
-	if sdkRoot == "" {
-		r.detail = "SDK not found"
-		return r
-	}
-	avdmanager := filepath.Join(sdkRoot, "cmdline-tools", "latest", "bin", "avdmanager")
-	if _, err := os.Stat(avdmanager); err != nil {
-		r.detail = "not installed"
-		sdkmanager := filepath.Join(sdkRoot, "cmdline-tools", "latest", "bin", "sdkmanager")
-		if _, err := os.Stat(sdkmanager); err == nil {
-			r.fixCmd = fmt.Sprintf("%s --install 'cmdline-tools;latest'", sdkmanager)
-		} else {
-			r.fixCmd = "brew install --cask android-commandlinetools"
-		}
+	p := findBinary("avdmanager")
+	if p == "" {
+		r.detail = "not found"
 		return r
 	}
 	r.ok = true
-	r.path = avdmanager
-	r.detail = "OK"
+	r.path = p
+	r.detail = p
 	return r
 }
 
 func checkAndroidPlatformTools() checkResult {
 	r := checkResult{name: "Android platform-tools (adb)"}
-	sdkRoot := findAndroidSDK()
-	if sdkRoot == "" {
-		r.detail = "SDK not found"
-		return r
-	}
-	adb := filepath.Join(sdkRoot, "platform-tools", "adb")
-	if _, err := os.Stat(adb); err != nil {
+	adb := findBinary("adb")
+	if adb == "" {
+		sdkmanager := findBinary("sdkmanager")
+		if sdkmanager != "" {
+			r.fixCmd = fmt.Sprintf("%s --install 'platform-tools'", sdkmanager)
+		} else {
+			r.fixCmd = "brew install --cask android-platform-tools"
+		}
 		r.detail = "not installed"
-		r.fixCmd = fmt.Sprintf("%s/cmdline-tools/latest/bin/sdkmanager --install 'platform-tools'", sdkRoot)
 		return r
 	}
 	out, _ := exec.Command(adb, "version").CombinedOutput()
@@ -498,21 +871,21 @@ func checkAndroidPlatformTools() checkResult {
 	}
 	r.ok = true
 	r.path = adb
-	r.detail = ver
+	r.detail = fmt.Sprintf("%s (%s)", adb, ver)
 	return r
 }
 
 func checkAndroidEmulator() checkResult {
 	r := checkResult{name: "Android Emulator"}
-	sdkRoot := findAndroidSDK()
-	if sdkRoot == "" {
-		r.detail = "SDK not found"
-		return r
-	}
-	emulator := filepath.Join(sdkRoot, "emulator", "emulator")
-	if _, err := os.Stat(emulator); err != nil {
+	emulator := findBinary("emulator")
+	if emulator == "" {
+		sdkmanager := findBinary("sdkmanager")
+		if sdkmanager != "" {
+			r.fixCmd = fmt.Sprintf("%s --install 'emulator'", sdkmanager)
+		} else {
+			r.fixCmd = "brew install --cask android-commandlinetools && sdkmanager --install 'emulator'"
+		}
 		r.detail = "not installed"
-		r.fixCmd = fmt.Sprintf("%s/cmdline-tools/latest/bin/sdkmanager --install 'emulator'", sdkRoot)
 		return r
 	}
 	out, _ := exec.Command(emulator, "-version").CombinedOutput()
@@ -525,11 +898,7 @@ func checkAndroidEmulator() checkResult {
 	}
 	r.ok = true
 	r.path = emulator
-	if ver != "" {
-		r.detail = ver
-	} else {
-		r.detail = "OK"
-	}
+	r.detail = fmt.Sprintf("%s (%s)", emulator, ver)
 	return r
 }
 
@@ -540,10 +909,17 @@ func checkAndroidSystemImages() checkResult {
 		r.detail = "SDK not found"
 		return r
 	}
-	sdkmanager := filepath.Join(sdkRoot, "cmdline-tools", "latest", "bin", "sdkmanager")
-	out, err := exec.Command(sdkmanager, "--list_installed").CombinedOutput()
+	sdkmanager := findBinaryNoInstall("sdkmanager")
+	if sdkmanager == "" {
+		r.detail = "sdkmanager not found (install cmdline-tools first)"
+		return r
+	}
+	// sdkmanager needs JAVA_HOME and --sdk_root
+	cmd := exec.Command(sdkmanager, "--sdk_root="+sdkRoot, "--list_installed")
+	cmd.Env = appendJavaHome(os.Environ())
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		r.detail = "sdkmanager failed"
+		r.detail = "sdkmanager failed (Java may be missing)"
 		return r
 	}
 	var images []string
@@ -555,8 +931,8 @@ func checkAndroidSystemImages() checkResult {
 		}
 	}
 	if len(images) == 0 {
-		r.detail = "none installed"
-		r.fixCmd = fmt.Sprintf("%s --install 'system-images;android-35;google_apis;arm64-v8a'", sdkmanager)
+		r.detail = "none installed (install from dashboard after start)"
+		r.fixCmd = fmt.Sprintf("yes | %s --sdk_root=%s --install 'system-images;android-35;google_apis;arm64-v8a'", sdkmanager, sdkRoot)
 		return r
 	}
 	r.ok = true
@@ -632,6 +1008,7 @@ func printHardwareCapacity() {
 }
 
 func findAndroidSDK() string {
+	// 1. Check env vars first
 	for _, env := range []string{"ANDROID_HOME", "ANDROID_SDK_ROOT"} {
 		if root := os.Getenv(env); root != "" {
 			if _, err := os.Stat(root); err == nil {
@@ -639,10 +1016,31 @@ func findAndroidSDK() string {
 			}
 		}
 	}
+
+	// 2. Try to find adb/emulator in PATH and derive SDK root
+	if adbPath, err := exec.LookPath("adb"); err == nil {
+		// adb is at <sdk>/platform-tools/adb
+		sdkRoot := filepath.Dir(filepath.Dir(adbPath))
+		if _, err := os.Stat(filepath.Join(sdkRoot, "platform-tools")); err == nil {
+			return sdkRoot
+		}
+	}
+	if emuPath, err := exec.LookPath("emulator"); err == nil {
+		// emulator is at <sdk>/emulator/emulator
+		sdkRoot := filepath.Dir(filepath.Dir(emuPath))
+		if _, err := os.Stat(filepath.Join(sdkRoot, "emulator")); err == nil {
+			return sdkRoot
+		}
+	}
+
+	// 3. Check common locations
 	home, _ := os.UserHomeDir()
 	candidates := []string{
 		filepath.Join(home, "Library", "Android", "sdk"),
 		filepath.Join(home, "Android", "Sdk"),
+		"/Library/Android/sdk",
+		"/opt/android-sdk",
+		"/usr/local/android-sdk",
 	}
 	for _, p := range candidates {
 		if _, err := os.Stat(p); err == nil {

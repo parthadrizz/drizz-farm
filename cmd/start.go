@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"os/signal"
+	"strings"
 	"path/filepath"
 	"runtime"
 	"syscall"
@@ -81,15 +83,44 @@ func runStart(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Detect Android SDK
+	// Set JAVA_HOME from stored config so SDK tools (sdkmanager, avdmanager) can find Java
+	if cfg.SDK.Java != "" {
+		javaHome := filepath.Dir(filepath.Dir(cfg.SDK.Java))
+		os.Setenv("JAVA_HOME", javaHome)
+	}
+
+	// Load SDK paths from config, validate each one actually works
+	sdkPaths := &cfg.SDK
+	redetected := false
+	validatePath := func(p *string) {
+		if *p == "" { return }
+		if _, err := os.Stat(*p); err != nil { *p = ""; redetected = true }
+	}
+	validatePath(&sdkPaths.ADB)
+	validatePath(&sdkPaths.AVDManager)
+	validatePath(&sdkPaths.Emulator)
+	validatePath(&sdkPaths.SDKManager)
+	if sdkPaths.Root != "" { if _, err := os.Stat(sdkPaths.Root); err != nil { sdkPaths.Root = ""; redetected = true } }
+	if redetected {
+		log.Warn().Msg("some SDK paths in config are stale — re-detecting")
+	}
+	android.SetResolvedPaths(sdkPaths.ADB, sdkPaths.AVDManager, sdkPaths.Emulator, sdkPaths.SDKManager)
+
 	sdk, err := android.DetectSDK()
 	if err != nil {
-		return fmt.Errorf("android SDK: %w", err)
+		return fmt.Errorf("android SDK: %w\nRun 'drizz-farm setup' to detect paths", err)
 	}
 	if err := sdk.Validate(); err != nil {
-		return fmt.Errorf("android SDK validation: %w", err)
+		return fmt.Errorf("android SDK validation: %w\nRun 'drizz-farm setup' to fix", err)
 	}
 	log.Info().Str("sdk", sdk.Root).Msg("android SDK detected")
+
+	// Warn if Xcode CLI tools missing on macOS (emulator may need it)
+	if runtime.GOOS == "darwin" {
+		if out, err := exec.Command("xcode-select", "-p").CombinedOutput(); err != nil || len(strings.TrimSpace(string(out))) == 0 {
+			log.Warn().Msg("Xcode Command Line Tools not found; run: xcode-select --install")
+		}
+	}
 
 	// Context with signal handling
 	ctx, cancel := context.WithCancel(context.Background())
@@ -225,11 +256,14 @@ func runStart(cmd *cobra.Command, args []string) error {
 		Int("capacity", cfg.Pool.MaxConcurrent).
 		Msg("drizz-farm is LIVE — emulators boot on-demand")
 
+	hostname, _ := os.Hostname()
+	lanIP := getLANIP()
+
 	fmt.Printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 	fmt.Printf("  drizz-farm is LIVE\n")
-	fmt.Printf("  Dashboard: http://localhost:%d\n", cfg.API.Port)
-	fmt.Printf("  Node: %s | Capacity: %d\n", cfg.Node.Name, cfg.Pool.MaxConcurrent)
-	fmt.Printf("  Mesh: %s\n", cfg.Mesh.Name)
+	fmt.Printf("  Dashboard: http://%s:%d\n", hostname, cfg.API.Port)
+	fmt.Printf("             http://%s:%d\n", lanIP, cfg.API.Port)
+	fmt.Printf("  Mesh: %s | Capacity: %d\n", cfg.Mesh.Name, cfg.Pool.MaxConcurrent)
 	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
 
 	// Wait for signal or error

@@ -4,6 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+
+	"github.com/rs/zerolog/log"
 
 	"github.com/drizz-dev/drizz-farm/internal/android"
 	"github.com/drizz-dev/drizz-farm/internal/config"
@@ -14,6 +19,7 @@ type discoveryHandlers struct {
 	sdk    *android.SDK
 	runner android.CommandRunner
 	store  *store.Store
+	cfg    *config.Config
 }
 
 type systemImageResponse struct {
@@ -36,7 +42,8 @@ type avdResponse struct {
 func (h *discoveryHandlers) SystemImages(w http.ResponseWriter, r *http.Request) {
 	images, err := h.sdk.ListInstalledSystemImages(r.Context(), h.runner)
 	if err != nil {
-		Error(w, fmt.Errorf("list system images: %w", err))
+		log.Warn().Err(err).Msg("discovery: failed to list system images")
+		JSON(w, http.StatusOK, map[string]any{"images": []any{}, "error": err.Error()})
 		return
 	}
 
@@ -56,7 +63,8 @@ func (h *discoveryHandlers) SystemImages(w http.ResponseWriter, r *http.Request)
 func (h *discoveryHandlers) Devices(w http.ResponseWriter, r *http.Request) {
 	devices, err := h.sdk.ListInstalledDevices(r.Context(), h.runner)
 	if err != nil {
-		Error(w, fmt.Errorf("list devices: %w", err))
+		log.Warn().Err(err).Msg("discovery: failed to list devices")
+		JSON(w, http.StatusOK, map[string]any{"devices": []any{}, "error": err.Error()})
 		return
 	}
 	JSON(w, http.StatusOK, map[string]any{"devices": devices})
@@ -67,7 +75,9 @@ func (h *discoveryHandlers) AVDs(w http.ResponseWriter, r *http.Request) {
 	avdMgr := android.NewAVDManager(h.sdk, h.runner)
 	avds, err := avdMgr.List(r.Context())
 	if err != nil {
-		Error(w, fmt.Errorf("list AVDs: %w", err))
+		// Return empty list instead of 500 — avdmanager might not work (no Java, etc.)
+		log.Warn().Err(err).Msg("discovery: failed to list AVDs")
+		JSON(w, http.StatusOK, map[string]any{"avds": []any{}, "error": err.Error()})
 		return
 	}
 
@@ -86,7 +96,8 @@ func (h *discoveryHandlers) AVDs(w http.ResponseWriter, r *http.Request) {
 func (h *discoveryHandlers) AvailableImages(w http.ResponseWriter, r *http.Request) {
 	images, err := h.sdk.ListAvailableSystemImages(r.Context(), h.runner)
 	if err != nil {
-		Error(w, fmt.Errorf("list available images: %w", err))
+		log.Warn().Err(err).Msg("discovery: failed to list available images")
+		JSON(w, http.StatusOK, map[string]any{"images": []any{}, "error": err.Error()})
 		return
 	}
 
@@ -114,12 +125,26 @@ func (h *discoveryHandlers) InstallImage(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Run sdkmanager --install in background
-	// For now, run synchronously (can be slow ~1-5 min)
-	_, err := h.runner.Run(r.Context(), h.sdk.SDKManagerPath(), "--install", req.Path)
+	// Run sdkmanager --install with JAVA_HOME and --sdk_root
+	// Accept licenses automatically with "yes" pipe
+	sdkManager := h.sdk.SDKManagerPath()
+	if sdkManager == "" {
+		JSON(w, http.StatusInternalServerError, ErrorResponse{
+			Error: "install_failed", Message: "sdkmanager not found", Code: 500,
+		})
+		return
+	}
+	cmd := exec.CommandContext(r.Context(), "sh", "-c",
+		fmt.Sprintf("yes | %s --sdk_root=%s --install '%s'", sdkManager, h.sdk.Root, req.Path))
+	// Inject JAVA_HOME from config
+	if javaPath := h.cfg.SDK.Java; javaPath != "" {
+		javaHome := filepath.Dir(filepath.Dir(javaPath))
+		cmd.Env = append(os.Environ(), "JAVA_HOME="+javaHome)
+	}
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		JSON(w, http.StatusInternalServerError, ErrorResponse{
-			Error: "install_failed", Message: fmt.Sprintf("Failed to install %s: %v", req.Path, err), Code: 500,
+			Error: "install_failed", Message: fmt.Sprintf("Failed to install %s: %v\n%s", req.Path, err, string(out)), Code: 500,
 		})
 		return
 	}

@@ -4,9 +4,12 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/rs/zerolog/log"
 )
 
 // SDK provides access to Android SDK tool paths.
@@ -16,7 +19,7 @@ type SDK struct {
 
 // DetectSDK finds the Android SDK on the system.
 func DetectSDK() (*SDK, error) {
-	// Check environment variables
+	// 1. Check environment variables
 	for _, env := range []string{"ANDROID_HOME", "ANDROID_SDK_ROOT"} {
 		if root := os.Getenv(env); root != "" {
 			if _, err := os.Stat(root); err == nil {
@@ -25,11 +28,28 @@ func DetectSDK() (*SDK, error) {
 		}
 	}
 
-	// Check common locations
+	// 2. Derive from adb/emulator in PATH
+	if adbPath, err := exec.LookPath("adb"); err == nil {
+		sdkRoot := filepath.Dir(filepath.Dir(adbPath))
+		if _, err := os.Stat(filepath.Join(sdkRoot, "platform-tools")); err == nil {
+			return &SDK{Root: sdkRoot}, nil
+		}
+	}
+	if emuPath, err := exec.LookPath("emulator"); err == nil {
+		sdkRoot := filepath.Dir(filepath.Dir(emuPath))
+		if _, err := os.Stat(filepath.Join(sdkRoot, "emulator")); err == nil {
+			return &SDK{Root: sdkRoot}, nil
+		}
+	}
+
+	// 3. Check common locations
 	home, _ := os.UserHomeDir()
 	candidates := []string{
-		filepath.Join(home, "Library", "Android", "sdk"), // macOS (Android Studio)
-		filepath.Join(home, "Android", "Sdk"),            // Linux
+		filepath.Join(home, "Library", "Android", "sdk"),
+		filepath.Join(home, "Android", "Sdk"),
+		"/Library/Android/sdk",
+		"/opt/android-sdk",
+		"/usr/local/android-sdk",
 	}
 
 	for _, path := range candidates {
@@ -41,40 +61,89 @@ func DetectSDK() (*SDK, error) {
 	return nil, fmt.Errorf("android SDK not found: set ANDROID_HOME or install via 'drizz-farm setup'")
 }
 
-// Validate checks that required SDK components are installed.
+// SDK stores resolved paths. Set once during setup, read from config everywhere.
+// Falls back to runtime search only if config paths are empty.
+
+// Validate checks that required SDK components are available.
 func (s *SDK) Validate() error {
-	required := []string{
-		s.ADBPath(),
-		s.AVDManagerPath(),
-		s.EmulatorPath(),
-		s.SDKManagerPath(),
+	// Required — can't run without these
+	required := map[string]string{
+		"adb":      s.ADBPath(),
+		"emulator": s.EmulatorPath(),
 	}
-	for _, tool := range required {
-		if _, err := os.Stat(tool); err != nil {
-			return fmt.Errorf("SDK tool not found: %s", tool)
+	for name, path := range required {
+		if path == "" {
+			return fmt.Errorf("SDK tool not found: %s (run 'drizz-farm setup' to detect paths)", name)
 		}
+	}
+	// Optional — needed for AVD creation but not for running existing AVDs
+	if s.AVDManagerPath() == "" {
+		log.Warn().Msg("avdmanager not found — AVD creation will be unavailable")
+	}
+	if s.SDKManagerPath() == "" {
+		log.Warn().Msg("sdkmanager not found — image installation will be unavailable")
 	}
 	return nil
 }
 
-// ADBPath returns the full path to the adb binary.
+// resolvedPaths stores paths from config. Set by NewSDKFromConfig.
+var resolvedPaths struct {
+	adb, avdmanager, emulator, sdkmanager string
+}
+
+// SetResolvedPaths stores pre-detected paths from config so Path methods don't search.
+func SetResolvedPaths(adb, avdmanager, emulator, sdkmanager string) {
+	resolvedPaths.adb = adb
+	resolvedPaths.avdmanager = avdmanager
+	resolvedPaths.emulator = emulator
+	resolvedPaths.sdkmanager = sdkmanager
+}
+
+// fallbackFind searches PATH and common locations. Only used if config has no stored path.
+func fallbackFind(name string) string {
+	if p, err := exec.LookPath(name); err == nil {
+		return p
+	}
+	common := []string{
+		"/opt/homebrew/bin/" + name,
+		"/usr/local/bin/" + name,
+		"/opt/homebrew/share/android-commandlinetools/cmdline-tools/latest/bin/" + name,
+	}
+	for _, p := range common {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return ""
+}
+
 func (s *SDK) ADBPath() string {
-	return filepath.Join(s.Root, "platform-tools", "adb")
+	if resolvedPaths.adb != "" { return resolvedPaths.adb }
+	// Fallback: check SDK root, then PATH
+	p := filepath.Join(s.Root, "platform-tools", "adb")
+	if _, err := os.Stat(p); err == nil { return p }
+	return fallbackFind("adb")
 }
 
-// AVDManagerPath returns the full path to the avdmanager binary.
 func (s *SDK) AVDManagerPath() string {
-	return filepath.Join(s.Root, "cmdline-tools", "latest", "bin", "avdmanager")
+	if resolvedPaths.avdmanager != "" { return resolvedPaths.avdmanager }
+	p := filepath.Join(s.Root, "cmdline-tools", "latest", "bin", "avdmanager")
+	if _, err := os.Stat(p); err == nil { return p }
+	return fallbackFind("avdmanager")
 }
 
-// EmulatorPath returns the full path to the emulator binary.
 func (s *SDK) EmulatorPath() string {
-	return filepath.Join(s.Root, "emulator", "emulator")
+	if resolvedPaths.emulator != "" { return resolvedPaths.emulator }
+	p := filepath.Join(s.Root, "emulator", "emulator")
+	if _, err := os.Stat(p); err == nil { return p }
+	return fallbackFind("emulator")
 }
 
-// SDKManagerPath returns the full path to the sdkmanager binary.
 func (s *SDK) SDKManagerPath() string {
-	return filepath.Join(s.Root, "cmdline-tools", "latest", "bin", "sdkmanager")
+	if resolvedPaths.sdkmanager != "" { return resolvedPaths.sdkmanager }
+	p := filepath.Join(s.Root, "cmdline-tools", "latest", "bin", "sdkmanager")
+	if _, err := os.Stat(p); err == nil { return p }
+	return fallbackFind("sdkmanager")
 }
 
 // PlatformToolsDir returns the platform-tools directory.

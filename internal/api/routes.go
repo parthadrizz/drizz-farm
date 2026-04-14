@@ -30,6 +30,7 @@ func RegisterRoutes(r chi.Router, cfg *config.Config, p *pool.Pool, b *session.B
 		sdk:    deps.SDK,
 		runner: deps.Runner,
 		store:  deps.Store,
+		cfg:    cfg,
 	}
 	devH := &deviceHandlers{
 		pool: p,

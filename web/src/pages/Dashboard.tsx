@@ -53,7 +53,8 @@ export function Dashboard() {
   const refresh = async () => {
     try {
       const [p, h, a, fed] = await Promise.all([
-        api.pool(), api.health(), api.avds(),
+        api.pool(), api.health(),
+        api.avds().catch(() => ({ avds: [] })),
         api.federationStatus().catch(() => null),
       ]);
       setPool(p); setHealth(h);

@@ -84,21 +84,37 @@ func (m *AVDManager) Delete(ctx context.Context, name string) error {
 	return nil
 }
 
-// List returns all existing AVDs.
+// List returns all existing AVDs by scanning ~/.android/avd/ directory.
+// Does NOT depend on avdmanager or Java — pure filesystem scan.
 func (m *AVDManager) List(ctx context.Context) ([]AVDInfo, error) {
-	out, err := m.runner.Run(ctx, m.sdk.AVDManagerPath(), "list", "avd", "-c")
+	home, err := os.UserHomeDir()
 	if err != nil {
-		return nil, fmt.Errorf("avdmanager list: %w", err)
+		return nil, fmt.Errorf("cannot find home dir: %w", err)
+	}
+
+	avdDir := filepath.Join(home, ".android", "avd")
+	entries, err := os.ReadDir(avdDir)
+	if err != nil {
+		// No AVD directory = no AVDs
+		return []AVDInfo{}, nil
 	}
 
 	var avds []AVDInfo
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		name := strings.TrimSpace(line)
-		if name != "" {
-			info := AVDInfo{Name: name}
-			EnrichAVDInfo(&info)
-			avds = append(avds, info)
+	for _, entry := range entries {
+		name := entry.Name()
+		// Each AVD has a .ini file: <name>.ini
+		if !strings.HasSuffix(name, ".ini") {
+			continue
 		}
+		avdName := strings.TrimSuffix(name, ".ini")
+		// Verify the .avd directory also exists
+		avdPath := filepath.Join(avdDir, avdName+".avd")
+		if _, err := os.Stat(avdPath); err != nil {
+			continue
+		}
+		info := AVDInfo{Name: avdName}
+		EnrichAVDInfo(&info)
+		avds = append(avds, info)
 	}
 	return avds, nil
 }
