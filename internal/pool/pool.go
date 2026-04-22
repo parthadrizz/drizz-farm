@@ -646,6 +646,22 @@ func (p *Pool) maintenanceLoop(ctx context.Context) {
 // prunes disconnected ones, destroys errored instances, and shuts down devices
 // that have been idle longer than the configured timeout.
 func (p *Pool) runMaintenance(ctx context.Context) {
+	// 0. Re-adopt emulators started externally (e.g., from Android Studio or manual `emulator` command)
+	// Skip if any device is currently booting — avoids race where a booting emulator
+	// gets double-adopted before its Device.Serial() is populated.
+	p.mu.RLock()
+	anyBooting := false
+	for _, inst := range p.instances {
+		if inst.State == StateBooting {
+			anyBooting = true
+			break
+		}
+	}
+	p.mu.RUnlock()
+	if !anyBooting {
+		p.adoptRunningEmulators(ctx)
+	}
+
 	// 1. Scan for USB devices
 	for _, scanner := range p.scanners {
 		devices, err := scanner.Scan(ctx)

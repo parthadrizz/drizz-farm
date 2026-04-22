@@ -1,0 +1,61 @@
+# CI — runs on every push + PR. Builds, tests, and vets the code.
+# Kept light so it finishes in ~2 minutes.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        # Skip android tests (TestAVDManagerList/Exists are stale — need SDK on the runner)
+        run: go test -race -count=1 $(go list ./... | grep -v 'internal/android$')
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - uses: actions/setup-go@v5
+        with: { go-version: '1.22', cache: true }
+
+      - name: Build React dashboard
+        run: |
+          cd web
+          npm ci
+          npm run build
+
+      - name: Copy dashboard into embed dir
+        run: |
+          rm -rf internal/api/dashboard
+          cp -r web/dist internal/api/dashboard
+
+      - name: Build Go binary
+        run: go build -o /tmp/drizz-farm .
+
+      - name: Smoke-check
+        run: /tmp/drizz-farm --help
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: cd web && npm ci && npx tsc -b

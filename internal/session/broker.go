@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"strings"
 	"sync"
 	"time"
 
@@ -16,7 +15,6 @@ import (
 
 	"github.com/drizz-dev/drizz-farm/internal/appium"
 	"github.com/drizz-dev/drizz-farm/internal/config"
-	"github.com/drizz-dev/drizz-farm/internal/federation"
 	"github.com/drizz-dev/drizz-farm/internal/pool"
 	"github.com/drizz-dev/drizz-farm/internal/store"
 	"github.com/drizz-dev/drizz-farm/internal/webhook"
@@ -33,22 +31,23 @@ type Broker struct {
 	mu       sync.RWMutex       // protects sessions map
 	sessions map[string]*Session // all sessions keyed by session ID
 
-	nodeName   string              // identity of this node in the federation
-	pool       *pool.Pool          // local device/emulator pool
-	queue      *Queue              // waiting requests when pool is exhausted
-	cfg        *config.Config      // server configuration
-	store      *store.Store        // SQLite persistence layer
-	webhook    *webhook.Sender     // outbound webhook dispatcher
-	appium     *appium.Manager     // manages per-session Appium servers
-	federation *federation.Registry // federation peer registry for remote sessions
-	hostIP     string              // detected LAN IP used in connection info
-	readyCh    chan struct{}        // signaled by pool when an emulator becomes warm
+	nodeName string              // identity of this node
+	pool     *pool.Pool          // local device/emulator pool
+	queue    *Queue              // waiting requests when pool is exhausted
+	cfg      *config.Config      // server configuration
+	store    *store.Store        // SQLite persistence layer
+	webhook  *webhook.Sender     // outbound webhook dispatcher
+	appium   *appium.Manager     // manages per-session Appium servers
+	hostIP   string              // detected LAN IP used in connection info
+	readyCh  chan struct{}       // signaled by pool when an emulator becomes warm
 
 	cancel context.CancelFunc // cancels background goroutines
 }
 
 // NewBroker creates a new session broker.
-func NewBroker(cfg *config.Config, p *pool.Pool, s *store.Store, fed *federation.Registry) *Broker {
+// The broker only manages THIS node's pool. Cross-node routing happens
+// in the dashboard (browser picks which node to call).
+func NewBroker(cfg *config.Config, p *pool.Pool, s *store.Store) *Broker {
 	queueTimeout := time.Duration(cfg.Pool.QueueTimeoutSeconds) * time.Second
 	readyCh := make(chan struct{}, 10) // buffered so notify never blocks
 
@@ -59,13 +58,12 @@ func NewBroker(cfg *config.Config, p *pool.Pool, s *store.Store, fed *federation
 	}
 
 	b := &Broker{
-		sessions:   make(map[string]*Session),
-		nodeName:   cfg.Node.Name,
-		pool:       p,
-		store:      s,
-		webhook:    webhook.NewSender(webhookURLs),
-		appium:     appium.NewManager(detectLANIP()),
-		federation: fed,
+		sessions: make(map[string]*Session),
+		nodeName: cfg.Node.Name,
+		pool:     p,
+		store:    s,
+		webhook:  webhook.NewSender(webhookURLs),
+		appium:   appium.NewManager(detectLANIP()),
 		queue:    NewQueue(cfg.Pool.QueueMaxSize, queueTimeout),
 		cfg:      cfg,
 		hostIP:   detectLANIP(),
@@ -84,7 +82,15 @@ func NewBroker(cfg *config.Config, p *pool.Pool, s *store.Store, fed *federation
 }
 
 // Start begins the broker's background tasks (timeout enforcement, queue draining).
+// Also cleans up zombie sessions from previous daemon crashes.
 func (b *Broker) Start(ctx context.Context) {
+	if b.store != nil {
+		if n, err := b.store.CleanupZombieSessions(); err != nil {
+			log.Warn().Err(err).Msg("broker: cleanup zombie sessions failed")
+		} else if n > 0 {
+			log.Info().Int("count", n).Msg("broker: cleaned up zombie sessions from previous run")
+		}
+	}
 	ctx, b.cancel = context.WithCancel(ctx)
 	go b.timeoutLoop(ctx)
 	go b.queueDrainLoop(ctx)
@@ -114,26 +120,12 @@ func (b *Broker) Create(ctx context.Context, req CreateSessionRequest) (*Session
 		}
 	}
 
-	// Try to allocate from local pool
+	// Try to allocate from local pool. If exhausted, queue — dashboard is
+	// responsible for picking a different node when this one is full.
 	inst, err := b.pool.Allocate(ctx, req.Profile)
 	if err != nil {
 		if errors.Is(err, pool.ErrPoolExhausted) {
-			// Try federation peers before queueing
-			if b.federation != nil && b.federation.PeerCount() > 0 {
-				peer := b.federation.FindPeerWithCapacity()
-				if peer != nil {
-					log.Info().Str("peer", peer.Name).Str("host", peer.Host).Msg("broker: routing to peer")
-					result, fedErr := b.federation.CreateRemoteSession(peer, req.Profile)
-					if fedErr == nil {
-						remoteSess := b.buildRemoteSession(peer, result, req)
-						log.Info().Str("session", remoteSess.ID).Str("peer", peer.Name).Msg("broker: remote session created")
-						return remoteSess, nil
-					}
-					log.Warn().Err(fedErr).Str("peer", peer.Name).Msg("broker: peer session failed")
-				}
-			}
-
-			log.Info().Str("profile", req.Profile).Msg("broker: pool exhausted (local + peers), queueing")
+			log.Info().Str("profile", req.Profile).Msg("broker: pool exhausted, queueing")
 			return b.queue.Enqueue(ctx, req)
 		}
 		return nil, fmt.Errorf("broker: allocate: %w", err)
@@ -178,25 +170,6 @@ func (b *Broker) Release(ctx context.Context, id string) error {
 		Dur("duration", now.Sub(sess.CreatedAt)).
 		Msg("broker: session released")
 
-	// If remote session, release on the remote node
-	if strings.HasPrefix(sess.InstanceID, "remote:") {
-		// Format: "remote:host:port/sessionID"
-		parts := strings.SplitN(strings.TrimPrefix(sess.InstanceID, "remote:"), "/", 2)
-		if len(parts) == 2 && b.federation != nil {
-			nodeAddr := parts[0]
-			remoteSessionID := parts[1]
-			if err := b.federation.ReleaseRemoteSession(nodeAddr, remoteSessionID); err != nil {
-				log.Warn().Err(err).Str("node", nodeAddr).Msg("broker: remote release failed")
-			}
-		}
-		// No local pool release needed
-		b.appium.Stop(id)
-		b.webhook.Send(webhook.Event{
-			Type: "session.released", SessionID: id, Duration: now.Sub(sess.CreatedAt).String(), NodeName: b.nodeName,
-		})
-		return nil
-	}
-
 	// Persist to SQLite
 	if b.store != nil {
 		b.store.RecordSession(sess.ID, sess.Profile, sess.Platform, sess.InstanceID, "", sess.Connection.ADBSerial, sess.Connection.Host, sess.Source, "released", b.nodeName, sess.Connection.ADBPort, sess.CreatedAt, sess.ReleasedAt)
@@ -224,38 +197,6 @@ func (b *Broker) Release(ctx context.Context, id string) error {
 	return nil
 }
 
-// buildRemoteSession creates a Session from a federation peer's response.
-func (b *Broker) buildRemoteSession(peer *federation.Peer, result map[string]any, req CreateSessionRequest) *Session {
-	remoteSess := &Session{
-		ID:         result["id"].(string),
-		NodeName:   peer.Name,
-		Profile:    req.Profile,
-		Platform:   req.Platform,
-		State:      SessionActive,
-		Source:     req.Source,
-		CreatedAt:  time.Now(),
-		ExpiresAt:  time.Now().Add(time.Duration(b.cfg.Pool.SessionTimeoutMinutes) * time.Minute),
-	}
-	if conn, ok := result["connection"].(map[string]any); ok {
-		remoteSess.Connection = ConnectionInfo{
-			Host:      fmt.Sprintf("%v", conn["host"]),
-			NodeName:  peer.Name,
-			AppiumURL: fmt.Sprintf("%v", conn["appium_url"]),
-			ADBSerial: fmt.Sprintf("%v", conn["adb_serial"]),
-		}
-		if port, ok := conn["adb_port"].(float64); ok {
-			remoteSess.Connection.ADBPort = int(port)
-		}
-	}
-	remoteSess.InstanceID = fmt.Sprintf("remote:%s:%d/%s", peer.Host, peer.Port, result["id"])
-
-	b.mu.Lock()
-	b.sessions[remoteSess.ID] = remoteSess
-	b.mu.Unlock()
-
-	return remoteSess
-}
-
 // drainQueue checks if there are queued requests and tries to allocate devices to them.
 func (b *Broker) drainQueue(ctx context.Context) {
 	entry := b.queue.TryDequeue()
@@ -267,21 +208,8 @@ func (b *Broker) drainQueue(ctx context.Context) {
 
 	inst, err := b.pool.Allocate(ctx, entry.Request.Profile)
 	if err != nil {
-		// Local pool still full — try federation peers
-		if b.federation != nil && b.federation.PeerCount() > 0 {
-			peer := b.federation.FindPeerWithCapacity()
-			if peer != nil {
-				log.Info().Str("peer", peer.Name).Msg("broker: queue drain routing to peer")
-				result, fedErr := b.federation.CreateRemoteSession(peer, entry.Request.Profile)
-				if fedErr == nil {
-					remoteSess := b.buildRemoteSession(peer, result, entry.Request)
-					entry.ResultCh <- QueueResult{Session: remoteSess}
-					log.Info().Str("session", remoteSess.ID).Str("peer", peer.Name).Msg("broker: queued request fulfilled via federation")
-					return
-				}
-			}
-		}
-		// No local or remote capacity — re-queue
+		// Local pool still full — re-queue. No cross-node fallback:
+		// dashboard should route new requests to a different node directly.
 		log.Debug().Err(err).Msg("broker: queue drain failed, re-queueing")
 		b.queue.PushFront(entry)
 		return

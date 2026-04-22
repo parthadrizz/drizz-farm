@@ -1,0 +1,11 @@
+# Cloudflare Pages redirects. Map the short URLs we advertise to their targets.
+
+# `get.drizz.ai` — serve the install script from the GitHub raw source.
+# Pages redirect only works when this file is deployed at get.drizz.ai,
+# not drizz.ai. Use a separate Pages project OR a worker route for that.
+# For now, leave get.drizz.ai as a separate Cloudflare Worker that fetches
+# install.sh from GitHub. See install.sh in the repo root.
+
+# Temporary redirects until the docs site exists:
+/docs                https://github.com/parthadrizz/drizz-farm#quickstart  302
+/install             https://github.com/parthadrizz/drizz-farm#install     302

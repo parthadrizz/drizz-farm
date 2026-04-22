@@ -1,11 +1,6 @@
 package api
 
 import (
-	"encoding/json"
-	"fmt"
-	"io"
-	"net/http"
-
 	"github.com/go-chi/chi/v5"
 
 	"github.com/drizz-dev/drizz-farm/internal/android"
@@ -24,6 +19,7 @@ func RegisterRoutes(r chi.Router, cfg *config.Config, p *pool.Pool, b *session.B
 		pool:      p,
 		broker:    b,
 		license:   lic,
+		registry:  deps.Registry,
 		startedAt: deps.StartedAt,
 	}
 	discH := &discoveryHandlers{
@@ -51,7 +47,20 @@ func RegisterRoutes(r chi.Router, cfg *config.Config, p *pool.Pool, b *session.B
 	_ = newScreenV2Handlers
 	webrtcH := &webrtcHandlers{pool: p, sdk: deps.SDK}
 
+	regH := &registryHandlers{reg: deps.Registry, cfg: cfg}
+
 	r.Route("/api/v1", func(r chi.Router) {
+		// Group / registry — who's in this group, where are they?
+		// Dashboard calls each node's URL directly; backend never proxies between nodes.
+		r.Get("/nodes", regH.List)                // public: list of nodes in this group
+		r.Get("/group", regH.GroupInfo)           // public: group name, self info
+		r.Post("/group", regH.CreateGroup)        // create a new group on this node
+		r.Post("/group/join", regH.JoinGroup)     // join an existing group via a peer URL + key
+		r.Delete("/group", regH.LeaveGroup)       // leave the group (go standalone)
+		r.Get("/group/export", regH.ExportGroup)  // auth: return full group config + key (for join)
+		r.Post("/nodes", regH.AddNode)            // auth: add/update a node entry
+		r.Delete("/nodes/{name}", regH.RemoveNode) // auth: remove a node entry
+
 		// Sessions
 		r.Post("/sessions", sessH.Create)
 		r.Get("/sessions", sessH.List)
@@ -140,126 +149,6 @@ func RegisterRoutes(r chi.Router, cfg *config.Config, p *pool.Pool, b *session.B
 		r.Put("/config", cfgH.UpdateConfig)
 		r.Get("/config/raw", cfgH.GetConfigRaw)
 		r.Put("/config/raw", cfgH.SaveConfigRaw)
-
-		// Federation — manage all nodes from orchestrator
-		r.Route("/federation", func(r chi.Router) {
-			// Add peer manually (when mDNS doesn't work)
-			r.Post("/add-peer", func(w http.ResponseWriter, r *http.Request) {
-				if deps.Federation == nil {
-					JSON(w, 500, ErrorResponse{Error: "no_federation", Message: "federation not enabled", Code: 500})
-					return
-				}
-				var req struct {
-					Host string `json:"host"`
-					Port int    `json:"port"`
-					Name string `json:"name"`
-				}
-				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-					JSON(w, 400, ErrorResponse{Error: "invalid", Message: "bad request", Code: 400})
-					return
-				}
-				if req.Host == "" || req.Port == 0 {
-					JSON(w, 400, ErrorResponse{Error: "invalid", Message: "host and port required", Code: 400})
-					return
-				}
-				if req.Name == "" {
-					req.Name = req.Host
-				}
-				deps.Federation.AddPeer(req.Name, req.Host, req.Port)
-				JSON(w, 200, map[string]string{"status": "ok", "peer": fmt.Sprintf("%s:%d", req.Host, req.Port)})
-			})
-
-			// Handshake — peer sends mesh key, we verify before accepting
-			r.Post("/handshake", func(w http.ResponseWriter, r *http.Request) {
-				if deps.Federation == nil {
-					JSON(w, 200, map[string]string{"status": "ok"})
-					return
-				}
-				var req struct {
-					MeshKey string `json:"mesh_key"`
-				}
-				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-					JSON(w, 400, ErrorResponse{Error: "invalid", Message: "bad request", Code: 400})
-					return
-				}
-				if !deps.Federation.VerifyHandshake(req.MeshKey) {
-					JSON(w, 403, ErrorResponse{Error: "forbidden", Message: "invalid mesh key", Code: 403})
-					return
-				}
-				JSON(w, 200, map[string]string{"status": "ok"})
-			})
-
-			r.Get("/peers", func(w http.ResponseWriter, r *http.Request) {
-				if deps.Federation == nil {
-					JSON(w, 200, map[string]any{"peers": []any{}, "count": 0})
-					return
-				}
-				peers := deps.Federation.Peers()
-				JSON(w, 200, map[string]any{"peers": peers, "count": len(peers)})
-			})
-
-			r.Get("/status", func(w http.ResponseWriter, r *http.Request) {
-				if deps.Federation == nil {
-					JSON(w, 200, map[string]any{"nodes": []any{}, "total_nodes": 1})
-					return
-				}
-				JSON(w, 200, deps.Federation.GetFederatedStatus())
-			})
-
-			// Proxy management to a specific node
-			r.Get("/nodes/{node}/pool", func(w http.ResponseWriter, r *http.Request) {
-				node := chi.URLParam(r, "node")
-				data, err := deps.Federation.GetRemotePool(node)
-				if err != nil { Error(w, err); return }
-				w.Header().Set("Content-Type", "application/json")
-				w.Write(data)
-			})
-
-			r.Get("/nodes/{node}/avds", func(w http.ResponseWriter, r *http.Request) {
-				node := chi.URLParam(r, "node")
-				data, err := deps.Federation.GetRemoteAVDs(node)
-				if err != nil { Error(w, err); return }
-				w.Header().Set("Content-Type", "application/json")
-				w.Write(data)
-			})
-
-			r.Get("/nodes/{node}/system-images", func(w http.ResponseWriter, r *http.Request) {
-				node := chi.URLParam(r, "node")
-				data, err := deps.Federation.GetRemoteSystemImages(node)
-				if err != nil { Error(w, err); return }
-				w.Header().Set("Content-Type", "application/json")
-				w.Write(data)
-			})
-
-			r.Post("/nodes/{node}/create-avds", func(w http.ResponseWriter, r *http.Request) {
-				node := chi.URLParam(r, "node")
-				body, _ := io.ReadAll(r.Body)
-				data, err := deps.Federation.CreateRemoteAVDs(node, string(body))
-				if err != nil { Error(w, err); return }
-				w.Header().Set("Content-Type", "application/json")
-				w.Write(data)
-			})
-
-			r.Post("/nodes/{node}/boot", func(w http.ResponseWriter, r *http.Request) {
-				node := chi.URLParam(r, "node")
-				var req struct { AVDName string `json:"avd_name"` }
-				json.NewDecoder(r.Body).Decode(&req)
-				data, err := deps.Federation.BootRemoteAVD(node, req.AVDName)
-				if err != nil { Error(w, err); return }
-				w.Header().Set("Content-Type", "application/json")
-				w.Write(data)
-			})
-
-			r.Post("/nodes/{node}/shutdown", func(w http.ResponseWriter, r *http.Request) {
-				node := chi.URLParam(r, "node")
-				var req struct { InstanceID string `json:"instance_id"` }
-				json.NewDecoder(r.Body).Decode(&req)
-				data, err := deps.Federation.ShutdownRemoteInstance(node, req.InstanceID)
-				if err != nil { Error(w, err); return }
-				w.Header().Set("Content-Type", "application/json")
-				w.Write(data)
-			})
-		})
 
 		// History
 		r.Get("/history/sessions", histH.SessionHistory)

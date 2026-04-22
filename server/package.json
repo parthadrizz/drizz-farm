@@ -1,0 +1,18 @@
+{
+  "name": "drizz-farm-api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cloudflare Worker for api.drizz.ai — drizz-farm lead capture + heartbeat ingestion",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:init": "wrangler d1 execute drizz-farm-leads --file schema.sql --remote",
+    "db:local": "wrangler d1 execute drizz-farm-leads --file schema.sql --local",
+    "query": "wrangler d1 execute drizz-farm-leads --command"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260101.0",
+    "typescript": "^5.4.0",
+    "wrangler": "^4.0.0"
+  }
+}

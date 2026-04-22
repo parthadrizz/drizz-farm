@@ -9,16 +9,18 @@ import (
 	"github.com/drizz-dev/drizz-farm/internal/config"
 	"github.com/drizz-dev/drizz-farm/internal/license"
 	"github.com/drizz-dev/drizz-farm/internal/pool"
+	"github.com/drizz-dev/drizz-farm/internal/registry"
 	"github.com/drizz-dev/drizz-farm/internal/session"
 
 	"github.com/drizz-dev/drizz-farm/internal/buildinfo"
 )
 
 type nodeHandlers struct {
-	cfg     *config.Config
-	pool    *pool.Pool
-	broker  *session.Broker
-	license *license.Validator
+	cfg       *config.Config
+	pool      *pool.Pool
+	broker    *session.Broker
+	license   *license.Validator
+	registry  *registry.Registry
 	startedAt time.Time
 }
 
@@ -31,13 +33,17 @@ func (h *nodeHandlers) Health(w http.ResponseWriter, r *http.Request) {
 	var memStats runtime.MemStats
 	runtime.ReadMemStats(&memStats)
 
+	groupName := ""
+	if h.registry != nil {
+		groupName = h.registry.GroupName()
+	}
+
 	JSON(w, http.StatusOK, map[string]any{
 		"status":   "healthy",
 		"node":     h.cfg.Node.Name,
 		"hostname": hostname,
-		"mesh": map[string]any{
-			"id":   h.cfg.Mesh.ID,
-			"name": h.cfg.Mesh.Name,
+		"group": map[string]any{
+			"name": groupName,
 		},
 		"version":  buildinfo.Version,
 		"uptime":   time.Since(h.startedAt).String(),
@@ -59,11 +65,11 @@ func (h *nodeHandlers) Health(w http.ResponseWriter, r *http.Request) {
 			"queued": h.broker.QueueDepth(),
 		},
 		"resources": map[string]any{
-			"goroutines":    runtime.NumGoroutine(),
-			"heap_alloc":    memStats.HeapAlloc,
-			"sys":           memStats.Sys,
-			"num_cpu":       runtime.NumCPU(),
-			"total_memory":  memStats.Sys,
+			"goroutines":   runtime.NumGoroutine(),
+			"heap_alloc":   memStats.HeapAlloc,
+			"sys":          memStats.Sys,
+			"num_cpu":      runtime.NumCPU(),
+			"total_memory": memStats.Sys,
 		},
 	})
 }

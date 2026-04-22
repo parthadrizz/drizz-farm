@@ -14,11 +14,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
+	"github.com/drizz-dev/drizz-farm/internal/buildinfo"
 	"github.com/drizz-dev/drizz-farm/internal/config"
+	"github.com/drizz-dev/drizz-farm/internal/daemon"
 	"github.com/drizz-dev/drizz-farm/internal/discovery"
+	"github.com/drizz-dev/drizz-farm/internal/telemetry"
 )
 
 var setupAutoInstall bool
@@ -49,11 +53,10 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	fmt.Println("  ━━━━━━━━━━━━━━━━")
 	fmt.Println()
 
-	// --- Step 1: Mesh Setup ---
-	meshName, meshKey, err := setupMesh(reader)
-	if err != nil {
-		return err
-	}
+	// Groups are created/joined from the dashboard — not here.
+	// Setup just creates a standalone node. User adds it to a group later.
+	meshName, meshKey := "", ""
+	_ = reader
 
 	// --- Step 2: Prerequisites Check ---
 	fmt.Println()
@@ -141,76 +144,146 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	if err := saveSetupConfig(meshName, meshKey); err != nil {
 		return fmt.Errorf("failed to save config: %w", err)
 	}
+	fmt.Println("  ✓ Config saved")
+
+	// --- Step 3.5: Register the install (mandatory email) ---
+	if err := registerInstall(reader); err != nil {
+		// Non-fatal — if the network is broken or the user aborted, keep going.
+		// We'll still store what we got locally so heartbeats can pick it up later.
+		log.Warn().Err(err).Msg("setup: registration had issues (continuing)")
+	}
+
+	// --- Step 4: Install as launchd service (auto-start on boot) ---
+	if err := installAutoStart(); err != nil {
+		log.Warn().Err(err).Msg("setup: failed to install auto-start (continuing)")
+		fmt.Printf("  ⚠ Auto-start install failed: %v\n", err)
+		fmt.Println("    You can run manually with 'drizz-farm start'")
+	} else {
+		fmt.Println("  ✓ Auto-start enabled (launchd)")
+	}
 
 	fmt.Println()
 	fmt.Println("  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-	fmt.Println("  ✓ Config saved")
+	fmt.Println("  ✓ drizz-farm is running")
 	fmt.Println()
-	fmt.Println("  Next:")
-	fmt.Println("    drizz-farm start")
+	hostname, _ := os.Hostname()
+	localHost := hostname
+	if !strings.HasSuffix(localHost, ".local") {
+		localHost += ".local"
+	}
+	fmt.Printf("  URL: http://%s:9401\n", localHost)
 	fmt.Println("  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	fmt.Println()
 
 	return nil
 }
 
-// setupMesh handles the mesh creation/join flow.
-func setupMesh(reader *bufio.Reader) (string, string, error) {
-	fmt.Println("  🔍 Scanning LAN for drizz-farm meshes...")
+// registerInstall prompts for an email + org name and sends a one-shot
+// signup event to api.drizz.ai. Email is mandatory — the prompt keeps
+// asking until the user provides something that looks like an email.
+// Everything else (org name) is optional. No verification step.
+//
+// If the user has already registered (install-id file exists AND a sibling
+// "registered" marker exists), we skip this entirely — re-running setup
+// on an existing install shouldn't re-prompt.
+func registerInstall(reader *bufio.Reader) error {
+	home, _ := os.UserHomeDir()
+	dataDir := filepath.Join(home, ".drizz-farm")
+	markerPath := filepath.Join(dataDir, ".registered")
 
-	// Discover existing meshes by scanning common mesh names
-	// We try "default" and any mesh names we find via broad mDNS scan
-	meshes := discoverMeshes()
-
-	if len(meshes) == 0 {
-		fmt.Println("     No other nodes found on LAN.")
-		fmt.Println()
-		fmt.Println("  1. Start fresh (new device lab)")
-		fmt.Println("  2. Join existing node")
-		fmt.Println()
-		fmt.Print("  → Choice: ")
-		c, _ := reader.ReadString('\n')
-		c = strings.TrimSpace(c)
-		if c == "2" {
-			return joinByAddress(reader)
-		}
-		// Start fresh — auto-generate mesh silently, no questions
-		hostname, _ := os.Hostname()
-		key := generateMeshKey()
-		fmt.Printf("\n  ✓ Node configured\n")
-		return hostname, key, nil
+	if _, err := os.Stat(markerPath); err == nil {
+		// Already registered on a previous setup run — keep the existing record.
+		return nil
 	}
 
-	// Show discovered meshes
-	fmt.Printf("     Found %d mesh(es):\n", len(meshes))
-	for i, m := range meshes {
-		fmt.Printf("       %d. \"%s\"  (%d node(s))\n", i+1, m.name, m.nodeCount)
+	installID, err := telemetry.GetOrCreateInstallID(dataDir)
+	if err != nil {
+		return fmt.Errorf("install-id: %w", err)
 	}
+
+	fmt.Println()
+	fmt.Println("  Almost there. Tell us who's using drizz-farm — we'll")
+	fmt.Println("  send occasional updates and a welcome email.")
 	fmt.Println()
 
-	// Build options
-	for i, m := range meshes {
-		fmt.Printf("  %d. Join \"%s\"\n", i+1, m.name)
+	// Email — mandatory.
+	var email string
+	for {
+		fmt.Print("  → Email: ")
+		raw, _ := reader.ReadString('\n')
+		email = strings.TrimSpace(raw)
+		if telemetry.ValidateEmail(email) {
+			break
+		}
+		fmt.Println("    Please enter a valid email.")
 	}
-	fmt.Printf("  %d. Join by address\n", len(meshes)+1)
-	fmt.Printf("  %d. Create new mesh\n", len(meshes)+2)
+
+	// Org — optional, press enter to skip.
+	fmt.Print("  → Team / company name (optional): ")
+	rawOrg, _ := reader.ReadString('\n')
+	org := strings.TrimSpace(rawOrg)
+
+	hostname, _ := os.Hostname()
+	telemetry.Signup(context.Background(), telemetry.SignupRequest{
+		InstallID: installID,
+		Email:     email,
+		OrgName:   org,
+		Hostname:  hostname,
+		OS:        runtime.GOOS,
+		Arch:      runtime.GOARCH,
+		Version:   buildinfo.Version,
+	})
+
+	// Drop a marker so re-running setup doesn't re-prompt.
+	_ = os.WriteFile(markerPath, []byte(email+"\n"), 0644)
+	fmt.Printf("  ✓ Registered as %s\n", email)
+	return nil
+}
+
+// installAutoStart installs drizz-farm as a launchd service.
+func installAutoStart() error {
+	binaryPath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("find binary: %w", err)
+	}
+	binaryPath, _ = filepath.Abs(binaryPath)
+
+	home, _ := os.UserHomeDir()
+	dataDir := filepath.Join(home, ".drizz-farm")
+	configPath := filepath.Join(dataDir, "config.yaml")
+
+	// Reinstall to pick up any binary path changes
+	if daemon.IsLaunchdInstalled() {
+		_ = daemon.UninstallLaunchd()
+	}
+
+	return daemon.InstallLaunchd(daemon.LaunchdConfig{
+		BinaryPath: binaryPath,
+		ConfigPath: configPath,
+		DataDir:    dataDir,
+		LogDir:     dataDir,
+	})
+}
+
+// setupMesh handles the mesh setup step.
+// Two options: standalone node or join an existing mesh.
+// Mesh creation happens from the dashboard, not the CLI.
+func setupMesh(reader *bufio.Reader) (string, string, error) {
+	fmt.Println("  1. Create standalone node")
+	fmt.Println("  2. Join a mesh")
 	fmt.Println()
 
 	for {
 		fmt.Print("  → Choice: ")
-		choiceStr, _ := reader.ReadString('\n')
-		choiceStr = strings.TrimSpace(choiceStr)
-		choice := 0
-		fmt.Sscanf(choiceStr, "%d", &choice)
+		c, _ := reader.ReadString('\n')
+		c = strings.TrimSpace(c)
 
-		if choice == len(meshes)+1 {
+		if c == "1" {
+			fmt.Println("  ✓ Standalone node — create or join a mesh later from the dashboard")
+			return "", "", nil
+		}
+		if c == "2" {
 			return joinByAddress(reader)
-		}
-		if choice == len(meshes)+2 {
-			return createNewMesh(reader)
-		}
-		if choice >= 1 && choice <= len(meshes) {
-			return joinExistingMesh(reader, meshes[choice-1])
 		}
 		fmt.Println("  Invalid choice, try again.")
 	}

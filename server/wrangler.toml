@@ -1,0 +1,25 @@
+# Cloudflare Worker config for api.drizz.ai
+# Deploys to a Worker + D1 (SQLite) database. Free tier handles millions of
+# requests/day — more than enough for a lead capture endpoint.
+#
+# Deploy:
+#   cd server
+#   npx wrangler login                         # one-time
+#   npx wrangler d1 create drizz-farm-leads    # one-time, copy the database_id below
+#   npx wrangler d1 execute drizz-farm-leads --file schema.sql --remote
+#   npx wrangler deploy
+#
+# Then point api.drizz.ai at the worker in the Cloudflare dashboard.
+
+name = "drizz-farm-api"
+main = "src/index.ts"
+compatibility_date = "2026-04-22"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "drizz-farm-leads"
+database_id = "2ef96412-aa08-4cb8-822b-ab189ea2c329"
+
+[[routes]]
+pattern = "api.drizz.ai/*"
+zone_name = "drizz.ai"

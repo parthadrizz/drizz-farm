@@ -2,12 +2,12 @@
 set -euo pipefail
 
 # drizz-farm installer
-# Usage: curl -fsSL https://get.drizz.dev/farm | bash
+# Usage: curl -fsSL https://get.drizz.ai/farm | bash
 
 BINARY_NAME="drizz-farm"
 INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="$HOME/.drizz-farm"
-DOWNLOAD_BASE="https://dist.drizz.dev/v1"
+DOWNLOAD_BASE="https://dist.drizz.ai/v1"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -77,7 +77,7 @@ install_binary() {
     info "Downloading drizz-farm for $platform..."
 
     # For now, build from source if download fails
-    # In production, this would download from dist.drizz.dev
+    # In production, this would download from dist.drizz.ai
     local download_url="${DOWNLOAD_BASE}/download/${BINARY_NAME}_${platform}.tar.gz"
 
     if command -v curl &>/dev/null; then
@@ -136,7 +136,7 @@ print_next_steps() {
     echo "  4. Create your first session:"
     echo "     drizz-farm session create --profile pixel_7_api34"
     echo ""
-    echo "Documentation: https://docs.drizz.dev/farm"
+    echo "Documentation: https://docs.drizz.ai/farm"
     echo ""
 }
 

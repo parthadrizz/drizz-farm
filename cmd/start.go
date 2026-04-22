@@ -21,13 +21,13 @@ import (
 	"github.com/drizz-dev/drizz-farm/internal/buildinfo"
 	"github.com/drizz-dev/drizz-farm/internal/config"
 	"github.com/drizz-dev/drizz-farm/internal/daemon"
-	"github.com/drizz-dev/drizz-farm/internal/discovery"
-	"github.com/drizz-dev/drizz-farm/internal/federation"
 	"github.com/drizz-dev/drizz-farm/internal/health"
 	"github.com/drizz-dev/drizz-farm/internal/license"
 	"github.com/drizz-dev/drizz-farm/internal/pool"
+	"github.com/drizz-dev/drizz-farm/internal/registry"
 	"github.com/drizz-dev/drizz-farm/internal/session"
 	"github.com/drizz-dev/drizz-farm/internal/store"
+	"github.com/drizz-dev/drizz-farm/internal/telemetry"
 )
 
 var visibleEmulators bool
@@ -156,17 +156,8 @@ func runStart(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("pool start: %w", err)
 	}
 
-	// Federation registry
-	fedRegistry := federation.NewRegistry(getLANIP(), cfg.API.Port, cfg.Mesh.Key)
-	fedRegistry.UpdateSelf(cfg.Node.Name, cfg.Pool.MaxConcurrent, cfg.Pool.MaxConcurrent, runtime.NumCPU(), int(getSystemMemoryMB()))
-	fedRegistry.SetSelfUpdateFn(func() {
-		status := emulatorPool.Status()
-		fedRegistry.UpdateSelf(cfg.Node.Name, status.TotalCapacity, status.Warm, runtime.NumCPU(), int(getSystemMemoryMB()))
-	})
-	fedRegistry.StartRefreshLoop(ctx, 10*time.Second)
-
-	// Session broker
-	broker := session.NewBroker(cfg, emulatorPool, dataStore, fedRegistry)
+	// Session broker — local-only, no federation
+	broker := session.NewBroker(cfg, emulatorPool, dataStore)
 	broker.Start(ctx)
 
 	// Health checker
@@ -186,53 +177,35 @@ func runStart(cmd *cobra.Command, args []string) error {
 	)
 	healthChecker.Start(ctx)
 
-	// mDNS announcement
-	var announcer *discovery.Announcer
-	if cfg.Network.MDNS.Enabled {
-		announcer, err = discovery.NewAnnouncer(ctx, discovery.AnnounceConfig{
-			NodeName:      cfg.Node.Name,
-			Port:          cfg.API.Port,
-			Version:       buildinfo.Version,
-			Tier:          string(lic.Current().Tier),
-			MeshID:        cfg.Mesh.ID,
-			MeshName:      cfg.Mesh.Name,
-			TotalCapacity: cfg.Pool.MaxConcurrent,
-		})
-		if err != nil {
-			log.Warn().Err(err).Msg("mDNS announcement failed (continuing)")
-		}
+	// Node registry — who else is in this group? (serves GET /nodes)
+	registryPath := filepath.Join(cfg.DataDir(), "nodes.yaml")
+	nodeReg, err := registry.New(registryPath)
+	if err != nil {
+		log.Warn().Err(err).Msg("registry: load failed, starting standalone")
+		nodeReg, _ = registry.New(registryPath)
 	}
 
-	// Discover peers via mDNS and add to federation
-	if cfg.Network.MDNS.Enabled {
-		go func() {
-			time.Sleep(3 * time.Second) // Wait for own mDNS to settle
-			nodes, err := discovery.BrowseMesh(ctx, 5*time.Second, cfg.Mesh.ID)
-			if err == nil {
-				for _, n := range nodes {
-					fedRegistry.AddPeer(n.Name, n.Host, n.Port)
-				}
-				if len(nodes) > 0 {
-					log.Info().Int("peers", len(nodes)).Msg("federation: discovered peers")
+	// Optional heartbeat — fires once every 24h if telemetry isn't disabled.
+	// Anonymous: just install-id + version + activity counts. Never blocks
+	// the daemon; failures are logged at debug level only.
+	telemetry.SetVersion(buildinfo.Version)
+	if installID, err := telemetry.GetOrCreateInstallID(cfg.DataDir()); err == nil {
+		telemetry.StartHeartbeatLoop(ctx, installID, buildinfo.Version, func() (int, int, int) {
+			nodeCount := len(nodeReg.Nodes())
+			if nodeCount < 1 {
+				nodeCount = 1 // standalone = 1
+			}
+			sessions, emulators := 0, 0
+			if dataStore != nil {
+				if c, err := dataStore.SessionsSince(time.Now().Add(-24 * time.Hour)); err == nil {
+					sessions = c
 				}
 			}
-			// Re-discover every 30 seconds
-			ticker := time.NewTicker(30 * time.Second)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-ticker.C:
-					nodes, err := discovery.BrowseMesh(ctx, 3*time.Second, cfg.Mesh.ID)
-					if err == nil {
-						for _, n := range nodes {
-							fedRegistry.AddPeer(n.Name, n.Host, n.Port)
-						}
-					}
-				}
-			}
-		}()
+			// Emulators booted today is a reasonable proxy for "activity."
+			// We don't track this separately yet; reuse session count for now.
+			emulators = sessions
+			return nodeCount, sessions, emulators
+		})
 	}
 
 	// API server
@@ -240,8 +213,8 @@ func runStart(cmd *cobra.Command, args []string) error {
 		StartedAt: startedAt,
 		SDK:       sdk,
 		Runner:    runner,
-		Store:      dataStore,
-		Federation: fedRegistry,
+		Store:     dataStore,
+		Registry:  nodeReg,
 	})
 
 	errCh := make(chan error, 1)
@@ -249,22 +222,34 @@ func runStart(cmd *cobra.Command, args []string) error {
 		errCh <- server.Start()
 	}()
 
+	// ── Startup banner ──────────────────────────────────────────
+	hostname, _ := os.Hostname()
+	lanIP := getLANIP()
+	// macOS hostnames already end in .local — don't double it
+	localHost := hostname
+	if !strings.HasSuffix(localHost, ".local") {
+		localHost = localHost + ".local"
+	}
+	localURL := fmt.Sprintf("http://%s:%d", localHost, cfg.API.Port)
+
+	fmt.Printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+	fmt.Printf("  drizz-farm is LIVE\n\n")
+	if nodeReg.HasGroup() {
+		fmt.Printf("  Group:     %s (%d nodes)\n", nodeReg.GroupName(), len(nodeReg.Nodes()))
+	} else {
+		fmt.Printf("  Mode:      Node (standalone)\n")
+	}
+	fmt.Printf("  URL:       %s\n", localURL)
+	fmt.Printf("  IP:        http://%s:%d\n", lanIP, cfg.API.Port)
+	fmt.Printf("  Capacity:  %d emulators\n", cfg.Pool.MaxConcurrent)
+	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
+
 	log.Info().
 		Str("node", cfg.Node.Name).
 		Int("api_port", cfg.API.Port).
 		Str("tier", string(lic.Current().Tier)).
 		Int("capacity", cfg.Pool.MaxConcurrent).
 		Msg("drizz-farm is LIVE — emulators boot on-demand")
-
-	hostname, _ := os.Hostname()
-	lanIP := getLANIP()
-
-	fmt.Printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-	fmt.Printf("  drizz-farm is LIVE\n")
-	fmt.Printf("  Dashboard: http://%s:%d\n", hostname, cfg.API.Port)
-	fmt.Printf("             http://%s:%d\n", lanIP, cfg.API.Port)
-	fmt.Printf("  Mesh: %s | Capacity: %d\n", cfg.Mesh.Name, cfg.Pool.MaxConcurrent)
-	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
 
 	// Wait for signal or error
 	select {
@@ -282,7 +267,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
 
-	// Stop in order: API → broker → health → pool → mDNS
+	// Stop in order: API → broker → health → pool
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Error().Err(err).Msg("api shutdown error")
 	}
@@ -290,9 +275,6 @@ func runStart(cmd *cobra.Command, args []string) error {
 	healthChecker.Stop()
 	if err := emulatorPool.Stop(shutdownCtx); err != nil {
 		log.Error().Err(err).Msg("pool shutdown error")
-	}
-	if announcer != nil {
-		announcer.Shutdown()
 	}
 
 	cancel()

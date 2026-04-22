@@ -118,6 +118,26 @@ func (s *Store) RecordSession(id, profile, platform, instanceID, deviceName, ser
 	return err
 }
 
+// CleanupZombieSessions marks all active/queued sessions as interrupted.
+// Called at daemon startup — if the daemon crashed, the emulators died
+// but the session records remain stuck in 'active' state.
+// Returns the number of sessions cleaned up.
+func (s *Store) CleanupZombieSessions() (int, error) {
+	res, err := s.db.Exec(`
+		UPDATE sessions
+		SET state = 'interrupted',
+		    released_at = ?,
+		    duration_seconds = CAST((julianday(?) - julianday(created_at)) * 86400 AS INTEGER)
+		WHERE state IN ('active', 'queued')`,
+		time.Now().Format(time.RFC3339),
+		time.Now().Format(time.RFC3339))
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
 // SessionHistory returns recent sessions.
 type SessionRecord struct {
 	ID              string  `json:"id"`
@@ -131,6 +151,14 @@ type SessionRecord struct {
 	CreatedAt       string  `json:"created_at"`
 	ReleasedAt      *string `json:"released_at"`
 	DurationSeconds int     `json:"duration_seconds"`
+}
+
+// SessionsSince returns the count of sessions created after the given time.
+// Used by the telemetry heartbeat to report rough activity.
+func (s *Store) SessionsSince(since time.Time) (int, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM sessions WHERE created_at > ?`, since.Format(time.RFC3339)).Scan(&n)
+	return n, err
 }
 
 // SessionHistory returns the most recent sessions from SQLite, ordered by creation time.

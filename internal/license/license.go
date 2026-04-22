@@ -19,7 +19,7 @@ func NewValidator() *Validator {
 
 // Validate checks a license key. Currently stubs to Pro tier for development.
 func (v *Validator) Validate(key string) (*License, error) {
-	// TODO: Implement real license validation against license.drizz.dev
+	// TODO: Implement real license validation against license.drizz.ai
 	// For now, return Pro tier to unblock development.
 	log.Info().Str("tier", "pro").Msg("license: using development Pro license (stub)")
 

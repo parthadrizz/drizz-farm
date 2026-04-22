@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import { api } from '../lib/api';
+import { api, GroupInfo, NodeList, CreateGroupResult } from '../lib/api';
+import { Wifi, Copy, Check, Server, Trash2 } from 'lucide-react';
 
-type Section = 'pool' | 'cleanup' | 'health' | 'network' | 'artifacts' | 'node' | 'api' | 'raw';
+type Section = 'pool' | 'cleanup' | 'health' | 'network' | 'artifacts' | 'node' | 'api' | 'group' | 'raw';
 
 export function Settings() {
   const [cfg, setCfg] = useState<any>(null);
@@ -12,6 +13,19 @@ export function Settings() {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
+  // Group / registry state
+  const [group, setGroup] = useState<GroupInfo | null>(null);
+  const [nodes, setNodes] = useState<NodeList | null>(null);
+  const [newGroupKey, setNewGroupKey] = useState<string>(''); // shown once after create
+
+  const refreshGroup = async () => {
+    try {
+      const [g, l] = await Promise.all([api.groupInfo(), api.listNodes()]);
+      setGroup(g);
+      setNodes(l);
+    } catch { /* ignore — new backend may not be live yet */ }
+  };
+
   useEffect(() => {
     (async () => {
       try {
@@ -19,6 +33,9 @@ export function Settings() {
         setConfigYaml(raw); setCfg(parsed); setEditBuffer(raw); setError('');
       } catch (e: any) { setError(e.message); }
     })();
+    refreshGroup();
+    const i = setInterval(refreshGroup, 5000);
+    return () => clearInterval(i);
   }, []);
 
   const handleSaveRaw = async () => {
@@ -43,7 +60,7 @@ export function Settings() {
     { id: 'pool', label: 'Pool' }, { id: 'cleanup', label: 'Cleanup' },
     { id: 'health', label: 'Health' }, { id: 'network', label: 'Network' },
     { id: 'artifacts', label: 'Artifacts' }, { id: 'node', label: 'Node' },
-    { id: 'api', label: 'API' }, { id: 'raw', label: 'Raw YAML' },
+    { id: 'api', label: 'API' }, { id: 'group', label: 'Group' }, { id: 'raw', label: 'Raw YAML' },
   ];
 
   return (
@@ -90,9 +107,8 @@ export function Settings() {
       )}
 
       {activeSection === 'network' && (
-        <FormSection title="Network" description="LAN access and service discovery.">
-          <Field label="mDNS Enabled" value={cfg.Network?.MDNS?.Enabled ? 'true' : 'false'} />
-          <Field label="mDNS Service Type" value={cfg.Network?.MDNS?.ServiceType} />
+        <FormSection title="Network" description="How other browsers reach this node.">
+          <Field label="External URL" value={cfg.Node?.ExternalURL || '(auto: hostname.local)'} hint="Override for Tailscale, ngrok, or hub deployment." />
           <Field label="Allowed CIDRs" value={(cfg.Network?.AllowedCIDRs || []).join(', ')} />
         </FormSection>
       )}
@@ -110,6 +126,7 @@ export function Settings() {
       {activeSection === 'node' && (
         <FormSection title="Node" description="This machine's identity and logging.">
           <Field label="Node Name" value={cfg.Node?.Name} hint="Empty = auto-detected." />
+          <Field label="External URL" value={cfg.Node?.ExternalURL} hint="Empty = http://hostname.local:port" />
           <Field label="Log Level" value={cfg.Node?.LogLevel} />
           <Field label="Data Directory" value={cfg.Node?.DataDir} />
           <Field label="Metrics Port" value={cfg.Node?.MetricsPort} />
@@ -122,6 +139,44 @@ export function Settings() {
           <Field label="REST Port" value={cfg.API?.Port} />
           <Field label="gRPC Port" value={cfg.API?.GRPCPort} />
         </FormSection>
+      )}
+
+      {activeSection === 'group' && (
+        <GroupSection
+          group={group}
+          nodes={nodes}
+          newGroupKey={newGroupKey}
+          onCreate={async (name: string) => {
+            try {
+              const res: CreateGroupResult = await api.createGroup(name);
+              setNewGroupKey(res.group_key);
+              await refreshGroup();
+              setMessage('Group created — copy the key now, it won’t be shown again');
+              setTimeout(() => setMessage(''), 8000);
+            } catch (e: any) { setError(e.message); }
+          }}
+          onJoin={async (peerURL: string, key: string) => {
+            try {
+              await api.joinGroup(peerURL, key);
+              await refreshGroup();
+              setMessage('Joined group');
+              setTimeout(() => setMessage(''), 5000);
+            } catch (e: any) {
+              setError(e.message);
+              throw e;
+            }
+          }}
+          onLeave={async () => {
+            try {
+              await api.leaveGroup();
+              setNewGroupKey('');
+              await refreshGroup();
+              setMessage('Left group — node is now standalone');
+              setTimeout(() => setMessage(''), 5000);
+            } catch (e: any) { setError(e.message); }
+          }}
+          onDismissKey={() => setNewGroupKey('')}
+        />
       )}
 
       {activeSection === 'raw' && (
@@ -173,6 +228,189 @@ function Field({ label, value, unit, hint }: { label: string; value: any; unit?:
       </div>
       <div className="text-sm font-mono text-foreground/80">
         {display}{unit ? <span className="text-muted-foreground ml-1">{unit}</span> : ''}
+      </div>
+    </div>
+  );
+}
+
+// ── Group section ─────────────────────────────────────────────────────────
+// Each node is independent. A "group" is just a shared list of node URLs + an
+// auth key for modifying that list. No leader, no sync, no consensus.
+function GroupSection({
+  group, nodes, newGroupKey,
+  onCreate, onJoin, onLeave, onDismissKey,
+}: {
+  group: GroupInfo | null;
+  nodes: NodeList | null;
+  newGroupKey: string;
+  onCreate: (name: string) => void;
+  onJoin: (peerURL: string, key: string) => Promise<void>;
+  onLeave: () => void;
+  onDismissKey: () => void;
+}) {
+  const [name, setName] = useState('');
+  const [copied, setCopied] = useState(false);
+  const [mode, setMode] = useState<'choose' | 'create' | 'join'>('choose');
+  const [joinURL, setJoinURL] = useState('');
+  const [joinKey, setJoinKey] = useState('');
+  const [joining, setJoining] = useState(false);
+  const [joinError, setJoinError] = useState('');
+
+  const copy = (text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  // Just-created group: show the key once with clear instructions.
+  if (newGroupKey) {
+    return (
+      <div className="section-card">
+        <div className="section-header">
+          <div className="flex items-center gap-2">
+            <Wifi className="w-3.5 h-3.5 text-primary" />
+            <span className="text-sm font-semibold text-foreground">Group created</span>
+          </div>
+        </div>
+        <div className="p-5 space-y-4">
+          <div className="text-xs text-muted-foreground">
+            Copy this key now. It won’t be shown again. Share it with other nodes so they can join the group.
+          </div>
+          <div className="flex items-center gap-2 surface-0 rounded-lg px-4 py-3">
+            <code className="flex-1 text-sm font-mono text-primary select-all">{newGroupKey}</code>
+            <button onClick={() => copy(newGroupKey)} className="p-1 rounded hover:bg-surface-2 text-muted-foreground hover:text-foreground">
+              {copied ? <Check className="w-3.5 h-3.5 text-primary" /> : <Copy className="w-3.5 h-3.5" />}
+            </button>
+          </div>
+          <button onClick={onDismissKey} className="action-btn action-btn-primary">I saved the key</button>
+        </div>
+      </div>
+    );
+  }
+
+  // Active group view — list members.
+  if (group?.has_group && nodes) {
+    return (
+      <div className="space-y-4">
+        <div className="section-card">
+          <div className="section-header">
+            <div className="flex items-center gap-2">
+              <Wifi className="w-3.5 h-3.5 text-primary" />
+              <span className="text-sm font-semibold text-foreground">{group.group_name}</span>
+            </div>
+            <span className="text-xs text-muted-foreground">{nodes.nodes.length} node{nodes.nodes.length !== 1 ? 's' : ''}</span>
+          </div>
+          <div className="divide-y divide-border/50">
+            {nodes.nodes.map(n => (
+              <div key={n.name} className="px-5 py-3.5 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <Server className="w-3.5 h-3.5 text-muted-foreground" />
+                  <div>
+                    <div className="text-sm font-medium text-foreground">
+                      {n.name}
+                      {n.name === group.self.name && <span className="ml-2 badge badge-node">THIS NODE</span>}
+                    </div>
+                    <div className="text-[11px] font-mono text-muted-foreground">{n.url}</div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="flex justify-end">
+          <button onClick={onLeave} className="action-btn action-btn-danger flex items-center gap-1.5">
+            <Trash2 className="w-3 h-3" /> Leave group
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Create form
+  if (mode === 'create') {
+    return (
+      <div className="section-card">
+        <div className="px-5 py-4 border-b border-border">
+          <h2 className="text-sm font-semibold text-foreground">Create group</h2>
+          <p className="text-xs text-muted-foreground mt-0.5">Name your group. You'll get a key to share with other nodes.</p>
+        </div>
+        <div className="p-5 space-y-4">
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1.5">Group name</label>
+            <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="e.g. my-lab"
+              className="w-full surface-2 border border-border rounded-lg px-3 py-2 text-sm text-foreground" />
+          </div>
+          <div className="flex items-center justify-end gap-3">
+            <button onClick={() => { setMode('choose'); setName(''); }} className="action-btn surface-3 text-foreground">Cancel</button>
+            <button onClick={() => name.trim() && onCreate(name.trim())} disabled={!name.trim()}
+              className="action-btn action-btn-primary disabled:opacity-40">Create</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Join form
+  if (mode === 'join') {
+    return (
+      <div className="section-card">
+        <div className="px-5 py-4 border-b border-border">
+          <h2 className="text-sm font-semibold text-foreground">Join group</h2>
+          <p className="text-xs text-muted-foreground mt-0.5">Paste the URL of any node already in the group, plus the group key.</p>
+        </div>
+        <div className="p-5 space-y-4">
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1.5">Peer URL</label>
+            <input type="text" value={joinURL} onChange={e => setJoinURL(e.target.value)}
+              placeholder="http://mac-mini-1.local:9401"
+              className="w-full surface-2 border border-border rounded-lg px-3 py-2 text-sm font-mono text-foreground" />
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1.5">Group key</label>
+            <input type="text" value={joinKey} onChange={e => setJoinKey(e.target.value)}
+              placeholder="paste key shared by another node"
+              className="w-full surface-2 border border-border rounded-lg px-3 py-2 text-sm font-mono text-foreground" />
+          </div>
+          {joinError && <p className="text-sm text-destructive">{joinError}</p>}
+          <div className="flex items-center justify-end gap-3">
+            <button onClick={() => { setMode('choose'); setJoinURL(''); setJoinKey(''); setJoinError(''); }}
+              className="action-btn surface-3 text-foreground">Cancel</button>
+            <button
+              disabled={joining || !joinURL.trim() || !joinKey.trim()}
+              onClick={async () => {
+                setJoining(true); setJoinError('');
+                try {
+                  await onJoin(joinURL.trim(), joinKey.trim());
+                  setMode('choose'); setJoinURL(''); setJoinKey('');
+                } catch (e: any) {
+                  setJoinError(e?.message || 'join failed');
+                }
+                setJoining(false);
+              }}
+              className="action-btn action-btn-primary disabled:opacity-40">
+              {joining ? 'Joining…' : 'Join'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Standalone — choose
+  return (
+    <div className="section-card">
+      <div className="p-8 text-center space-y-4">
+        <Wifi className="w-8 h-8 text-muted-foreground mx-auto" />
+        <div>
+          <h3 className="text-sm font-semibold text-foreground">Standalone</h3>
+          <p className="text-xs text-muted-foreground mt-1 max-w-md mx-auto">
+            This node isn't part of any group. Create a new group, or join an existing one.
+          </p>
+        </div>
+        <div className="flex items-center justify-center gap-2">
+          <button onClick={() => setMode('create')} className="action-btn action-btn-primary">Create group</button>
+          <button onClick={() => setMode('join')} className="action-btn surface-3 text-foreground">Join group</button>
+        </div>
       </div>
     </div>
   );

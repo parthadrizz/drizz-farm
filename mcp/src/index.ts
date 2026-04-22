@@ -26,7 +26,7 @@ server.tool(
   },
   async ({ action, session_id, profile }) => {
     if (!(await farm.isAvailable())) {
-      return { content: [{ type: "text", text: "drizz-farm not found. Install: curl -fsSL https://get.drizz.dev/farm | bash" }] };
+      return { content: [{ type: "text", text: "drizz-farm not found. Install: curl -fsSL https://get.drizz.ai/farm | bash" }] };
     }
 
     switch (action) {

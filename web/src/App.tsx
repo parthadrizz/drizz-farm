@@ -1,7 +1,6 @@
 import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom';
 import { Dashboard } from './pages/Dashboard';
 import { CreateWizard } from './pages/CreateWizard';
-import { Nodes } from './pages/Nodes';
 import { Sessions } from './pages/Sessions';
 import { Settings } from './pages/Settings';
 import { LiveView } from './pages/LiveView';
@@ -37,7 +36,6 @@ function App() {
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/create" element={<CreateWizard />} />
-            <Route path="/nodes" element={<Nodes />} />
             <Route path="/sessions" element={<Sessions />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/grid" element={<GridView />} />

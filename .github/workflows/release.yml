@@ -1,0 +1,85 @@
+# Release workflow
+#
+# Triggered when a tag matching `v*` is pushed (e.g. `git tag v0.1.0 && git push --tags`).
+# Builds:
+#   - React dashboard (embedded into the Go binary)
+#   - macOS universal binary (arm64 + amd64 combined via lipo)
+#   - Linux binaries (arm64 + amd64) as a nice-to-have
+# Packages each as a tarball, writes SHA256SUMS, and attaches all to a
+# GitHub Release named after the tag.
+#
+# No Cloudflare/homebrew interaction — this job just ships binaries.
+# The `install.sh` and Homebrew tap point at these release assets.
+
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:  # allow manual runs from the Actions tab
+
+permissions:
+  contents: write     # needed to create a Release and upload assets
+
+jobs:
+  build:
+    runs-on: macos-latest  # Mac runner so we have `lipo` for universal binaries
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Build React dashboard
+        run: |
+          cd web
+          npm ci
+          npm run build
+
+      - name: Copy dashboard into embed dir
+        run: |
+          rm -rf internal/api/dashboard
+          cp -r web/dist internal/api/dashboard
+
+      - name: Build binaries + universal macOS
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          make release VERSION="$VERSION"
+
+      - name: Show release artifacts
+        run: ls -lh dist/ && cat dist/SHA256SUMS
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          draft: false
+          prerelease: ${{ contains(github.ref, '-') }}  # any tag like v0.1.0-beta.1 → prerelease
+          generate_release_notes: true
+          body: |
+            ## Install
+
+            ```bash
+            # macOS (Apple Silicon or Intel) — universal binary
+            curl -fsSL https://get.drizz.ai | bash
+
+            # or Homebrew
+            brew install drizz-ai/tap/drizz-farm
+            ```
+
+            ## Verify
+            Checksums are in `SHA256SUMS`.

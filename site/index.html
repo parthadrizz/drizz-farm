@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>drizz-farm — self-hosted Android device lab</title>
+<meta name="description" content="Turn your Macs into a shared Android emulator pool. One binary, full ADB root, unlimited test minutes. Apache 2.0." />
+<meta property="og:title" content="drizz-farm — self-hosted Android device lab" />
+<meta property="og:description" content="Replace BrowserStack with a device lab on your own Macs. Full ADB root access, unlimited minutes, Apache 2.0 OSS." />
+<meta property="og:url" content="https://drizz.ai" />
+<meta name="twitter:card" content="summary_large_image" />
+<link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>📱</text></svg>" />
+<style>
+  :root {
+    --bg: #0a0a0a;
+    --surface: #111;
+    --surface-2: #1a1a1a;
+    --border: #222;
+    --text: #e8e8e8;
+    --muted: #888;
+    --primary: #22c55e;
+    --accent: #60a5fa;
+    --mono: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+    --sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: var(--sans); line-height: 1.6; }
+  main { max-width: 920px; margin: 0 auto; padding: 64px 24px; }
+
+  /* Top nav */
+  nav {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 24px; max-width: 920px; margin: 0 auto;
+    border-bottom: 1px solid var(--border);
+  }
+  nav .logo { font-family: var(--mono); font-weight: 700; font-size: 14px; letter-spacing: -0.3px; }
+  nav .logo span.brand { color: var(--primary); }
+  nav .logo span.dash { color: var(--muted); }
+  nav a { color: var(--muted); text-decoration: none; font-size: 14px; margin-left: 20px; transition: color 0.15s; }
+  nav a:hover { color: var(--text); }
+
+  /* Hero */
+  h1 { font-size: 48px; line-height: 1.1; letter-spacing: -1.5px; font-weight: 800; margin-bottom: 20px; }
+  h1 .hl { color: var(--primary); }
+  .lede { font-size: 20px; color: var(--muted); max-width: 640px; margin-bottom: 40px; }
+
+  /* Install block */
+  .install {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 20px 24px; font-family: var(--mono);
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    margin-bottom: 16px;
+  }
+  .install code { color: var(--primary); font-size: 14px; white-space: nowrap; overflow: auto; }
+  .install button {
+    background: var(--surface-2); border: 1px solid var(--border); color: var(--muted);
+    font-family: var(--mono); font-size: 12px; padding: 6px 12px; border-radius: 6px;
+    cursor: pointer; transition: all 0.15s;
+  }
+  .install button:hover { color: var(--text); border-color: #444; }
+  .install button.copied { color: var(--primary); border-color: var(--primary); }
+
+  .alt-install { color: var(--muted); font-size: 13px; font-family: var(--mono); }
+  .alt-install code { color: var(--accent); }
+
+  /* Section */
+  section { margin-top: 80px; }
+  h2 { font-size: 28px; letter-spacing: -0.5px; margin-bottom: 24px; font-weight: 700; }
+
+  /* Feature grid */
+  .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; }
+  .grid .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 24px;
+  }
+  .grid h3 { font-size: 16px; margin-bottom: 8px; }
+  .grid p { color: var(--muted); font-size: 14px; }
+
+  /* Compare table */
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { padding: 12px 16px; text-align: left; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+  td.good { color: var(--primary); }
+  td.bad { color: #ef4444; }
+
+  /* Architecture ASCII */
+  pre {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 20px; font-family: var(--mono);
+    font-size: 13px; line-height: 1.5; color: var(--muted);
+    overflow-x: auto;
+  }
+
+  footer {
+    margin-top: 96px; padding: 32px 0; border-top: 1px solid var(--border);
+    color: var(--muted); font-size: 13px;
+    display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px;
+  }
+  footer a { color: var(--muted); text-decoration: none; }
+  footer a:hover { color: var(--text); }
+
+  @media (max-width: 640px) {
+    h1 { font-size: 36px; }
+    .lede { font-size: 16px; }
+    .grid { grid-template-columns: 1fr; }
+    .install { flex-direction: column; align-items: stretch; }
+    .install code { white-space: normal; word-break: break-all; }
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="logo">
+    <span class="brand">drizz</span><span class="dash">-farm</span>
+  </div>
+  <div>
+    <a href="https://github.com/parthadrizz/drizz-farm">GitHub</a>
+    <a href="https://github.com/parthadrizz/drizz-farm#quickstart">Docs</a>
+    <a href="/privacy">Privacy</a>
+  </div>
+</nav>
+
+<main>
+
+  <h1>A device lab <span class="hl">on your own Macs.</span></h1>
+  <p class="lede">
+    drizz-farm turns your Mac Minis into a shared Android emulator pool.
+    Full ADB root, unlimited test minutes, zero cloud dependencies.
+    One binary. Apache 2.0.
+  </p>
+
+  <div class="install">
+    <code id="install-cmd">curl -fsSL https://get.drizz.ai | bash</code>
+    <button onclick="copyInstall()">Copy</button>
+  </div>
+  <p class="alt-install">or <code>brew install drizz-ai/tap/drizz-farm</code></p>
+
+  <section>
+    <h2>Why</h2>
+    <div class="grid">
+      <div class="card">
+        <h3>Own the hardware, own the data</h3>
+        <p>Everything runs on your Macs. Test artifacts never leave your network. No per-seat fees, no per-minute charges.</p>
+      </div>
+      <div class="card">
+        <h3>Real ADB root access</h3>
+        <p>Install any APK, instrument anything, inspect any state. The cloud services restrict this for good reason — we don't have to.</p>
+      </div>
+      <div class="card">
+        <h3>Scale by adding Macs</h3>
+        <p>Each machine contributes its emulators to a shared dashboard. Add a Mac Mini, add capacity. No orchestrator, no coordinator, no bottleneck.</p>
+      </div>
+      <div class="card">
+        <h3>Frameworks you already use</h3>
+        <p>Appium, Espresso, Maestro, whatever you have. drizz-farm just exposes the emulators via standard ADB — it doesn't care what runs on top.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>vs Cloud providers</h2>
+    <table>
+      <thead>
+        <tr>
+          <th></th>
+          <th>drizz-farm</th>
+          <th>BrowserStack / LambdaTest</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Monthly cost</td>
+          <td class="good">Free (OSS) / own hardware</td>
+          <td class="bad">$39–$199/seat</td>
+        </tr>
+        <tr>
+          <td>Test minutes</td>
+          <td class="good">Unlimited</td>
+          <td class="bad">Metered</td>
+        </tr>
+        <tr>
+          <td>ADB root</td>
+          <td class="good">Yes</td>
+          <td class="bad">Restricted</td>
+        </tr>
+        <tr>
+          <td>Parallel devices</td>
+          <td class="good">Whatever your Macs can run</td>
+          <td class="bad">Plan-dependent</td>
+        </tr>
+        <tr>
+          <td>Data residency</td>
+          <td class="good">Your network</td>
+          <td class="bad">Their cloud</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Architecture</h2>
+    <pre>
+┌─────────────┐        ┌──────────────┐        ┌──────────────┐
+│  Dashboard  │◀──────▶│   Mac Mini   │        │   Mac Mini   │
+│  (browser)  │        │   4 AVDs     │◀──────▶│   4 AVDs     │
+└─────────────┘        │   drizz-farm │        │   drizz-farm │
+                       └──────────────┘        └──────────────┘
+</pre>
+    <p style="color: var(--muted); font-size: 14px; margin-top: 16px;">
+      Each node runs a standalone Go daemon with an embedded dashboard.
+      Nodes share a group directory so the dashboard can see all of them.
+      The browser routes requests to each node directly — no backend
+      coordination, no leader election, no distributed systems to debug.
+    </p>
+  </section>
+
+  <section>
+    <h2>Quickstart</h2>
+    <pre>
+$ curl -fsSL https://get.drizz.ai | bash
+$ drizz-farm setup             # detect Android SDK, install launchd service
+$ open http://$(hostname).local:9401
+</pre>
+    <p style="color: var(--muted); font-size: 14px; margin-top: 16px;">
+      Click <b>+ Add</b> in the dashboard to create an AVD. Click <b>Start</b>
+      to boot it. Your test runner hits the local ADB port — it doesn't need
+      to know anything about drizz-farm.
+    </p>
+  </section>
+
+  <section>
+    <h2>Where it's going</h2>
+    <div class="grid">
+      <div class="card">
+        <h3>Today — OSS</h3>
+        <p>Self-hosted, LAN-first, works on Tailscale for remote dev teams. Free forever, Apache 2.0.</p>
+      </div>
+      <div class="card">
+        <h3>Soon — Cloud hub</h3>
+        <p>One URL (<code>farm.drizz.ai/your-team</code>) that routes to your Macs via an outbound tunnel. Access from anywhere, no VPN. Paid, coming Q3.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div>© 2026 Drizz Labs · Apache 2.0</div>
+    <div>
+      <a href="https://github.com/parthadrizz/drizz-farm">GitHub</a> ·
+      <a href="/privacy">Privacy</a> ·
+      <a href="mailto:hi@drizz.ai">Contact</a>
+    </div>
+  </footer>
+
+</main>
+
+<script>
+  function copyInstall() {
+    const el = document.getElementById('install-cmd');
+    navigator.clipboard.writeText(el.textContent).then(() => {
+      const btn = document.querySelector('.install button');
+      btn.textContent = 'Copied!';
+      btn.classList.add('copied');
+      setTimeout(() => {
+        btn.textContent = 'Copy';
+        btn.classList.remove('copied');
+      }, 2000);
+    });
+  }
+</script>
+</body>
+</html>

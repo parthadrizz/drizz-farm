@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/spf13/viper"
+	"gopkg.in/yaml.v3"
 )
 
 // Config is the root configuration for drizz-farm.
@@ -34,19 +35,24 @@ type SDKPaths struct {
 	Java       string `yaml:"java"        mapstructure:"java"`
 }
 
-// MeshConfig controls multi-node mesh networking.
-// Nodes federate with peers that share the same mesh ID and key.
+// MeshConfig is retained only for reading legacy config.yaml files.
+// The current architecture uses a registry (nodes.yaml) instead.
+// New code must not depend on these fields. See internal/registry.
 type MeshConfig struct {
-	ID   string `yaml:"id"          mapstructure:"id"`          // unique mesh identifier (auto-generated)
-	Name string `yaml:"name"        mapstructure:"name"`        // display label (defaults to hostname)
-	Key  string `yaml:"key"         mapstructure:"key"`         // shared secret for peer auth
+	ID   string `yaml:"id,omitempty"   mapstructure:"id"`
+	Name string `yaml:"name,omitempty" mapstructure:"name"`
+	Key  string `yaml:"key,omitempty"  mapstructure:"key"`
 }
 
 type NodeConfig struct {
-	Name        string `yaml:"name"         mapstructure:"name"`
-	DataDir     string `yaml:"data_dir"     mapstructure:"data_dir"`
-	LogLevel    string `yaml:"log_level"    mapstructure:"log_level"`
-	MetricsPort int    `yaml:"metrics_port" mapstructure:"metrics_port"`
+	Name        string `yaml:"name"          mapstructure:"name"`
+	// ExternalURL is how other browsers reach this node.
+	// Empty → defaults to http://<hostname>.local:<port> (LAN).
+	// Set to Tailscale URL, ngrok URL, or hub URL for remote deployments.
+	ExternalURL string `yaml:"external_url"  mapstructure:"external_url"`
+	DataDir     string `yaml:"data_dir"      mapstructure:"data_dir"`
+	LogLevel    string `yaml:"log_level"     mapstructure:"log_level"`
+	MetricsPort int    `yaml:"metrics_port"  mapstructure:"metrics_port"`
 }
 
 type PoolConfig struct {
@@ -106,6 +112,7 @@ type NetworkConfig struct {
 type MDNSConfig struct {
 	Enabled     bool   `yaml:"enabled"      mapstructure:"enabled"`
 	ServiceType string `yaml:"service_type" mapstructure:"service_type"`
+	Hostname    bool   `yaml:"hostname"     mapstructure:"hostname"` // register mesh-name.local via mDNS A record
 }
 
 type HealthCheckConfig struct {
@@ -138,6 +145,18 @@ type LicenseConfig struct {
 	Key                string `yaml:"key"                  mapstructure:"key"`
 	ValidationEndpoint string `yaml:"validation_endpoint"  mapstructure:"validation_endpoint"`
 	GracePeriodHours   int    `yaml:"grace_period_hours"   mapstructure:"grace_period_hours"`
+}
+
+// Save writes the current config to disk as YAML.
+func (c *Config) Save() error {
+	home, _ := os.UserHomeDir()
+	configPath := filepath.Join(home, ".drizz-farm", "config.yaml")
+
+	data, err := yaml.Marshal(c)
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
+	return os.WriteFile(configPath, data, 0644)
 }
 
 // Load reads the configuration from viper (already initialized) into a Config struct.

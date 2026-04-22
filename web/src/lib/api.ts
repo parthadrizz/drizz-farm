@@ -51,12 +51,36 @@ export interface Session {
 export interface NodeHealth {
   status: string;
   node: string;
-  mesh: { id: string; name: string };
+  group: { name: string };
   version: string;
   uptime: string;
   pool: { capacity: number; warm: number; allocated: number; booting: number; error: number };
   sessions: { active: number; queued: number };
   resources: { goroutines: number; num_cpu: number; heap_alloc: number };
+}
+
+export interface NodeEntry {
+  name: string;
+  url: string;
+  added_at?: string;
+  description?: string;
+}
+
+export interface GroupInfo {
+  group_name: string;
+  has_group: boolean;
+  self: { name: string; url: string };
+}
+
+export interface NodeList {
+  group_name: string;
+  nodes: NodeEntry[];
+}
+
+export interface CreateGroupResult {
+  group_name: string;
+  group_key: string;
+  self: NodeEntry;
 }
 
 export interface SystemImage {
@@ -125,17 +149,31 @@ export const api = {
   startHAR: (id: string) => fetchJSON<any>(`/sessions/${id}/har/start`, { method: 'POST' }),
   stopHAR: (id: string) => fetchJSON<any>(`/sessions/${id}/har/stop`, { method: 'POST' }),
 
-  // Federation
-  federationStatus: () => fetchJSON<any>('/federation/status'),
-  federationPeers: () => fetchJSON<any>('/federation/peers'),
-  remotePool: (node: string) => fetchJSON<any>(`/federation/nodes/${node}/pool`),
-  remoteAVDs: (node: string) => fetchJSON<any>(`/federation/nodes/${node}/avds`),
-  remoteCreateAVDs: (node: string, data: any) =>
-    fetchJSON<any>(`/federation/nodes/${node}/create-avds`, { method: 'POST', body: JSON.stringify(data) }),
-  remoteBoot: (node: string, avdName: string) =>
-    fetchJSON<any>(`/federation/nodes/${node}/boot`, { method: 'POST', body: JSON.stringify({ avd_name: avdName }) }),
-  remoteShutdown: (node: string, instanceId: string) =>
-    fetchJSON<any>(`/federation/nodes/${node}/shutdown`, { method: 'POST', body: JSON.stringify({ instance_id: instanceId }) }),
+  // Group / registry (this node's view of the group)
+  groupInfo: () => fetchJSON<GroupInfo>('/group'),
+  listNodes: () => fetchJSON<NodeList>('/nodes'),
+  createGroup: (name: string) => fetchJSON<CreateGroupResult>('/group', { method: 'POST', body: JSON.stringify({ name }) }),
+  joinGroup: (peerURL: string, groupKey: string) =>
+    fetchJSON<{ status: string; group_name: string }>('/group/join', {
+      method: 'POST', body: JSON.stringify({ peer_url: peerURL, group_key: groupKey }),
+    }),
+  leaveGroup: () => fetchJSON<{ status: string }>('/group', { method: 'DELETE' }),
+  addNode: (key: string, node: NodeEntry) =>
+    fetchJSON<any>('/nodes', { method: 'POST', body: JSON.stringify(node), headers: { 'X-Group-Key': key, 'Content-Type': 'application/json' } }),
+  removeNode: (key: string, name: string) =>
+    fetchJSON<any>(`/nodes/${encodeURIComponent(name)}`, { method: 'DELETE', headers: { 'X-Group-Key': key } }),
+
+  // Cross-node calls — talk directly to the peer's URL from the browser.
+  // `nodeURL` is the peer's external_url from /nodes (e.g. http://mac-2.local:9401).
+  peer: {
+    pool: (nodeURL: string) => fetch(`${nodeURL}/api/v1/pool`).then(r => r.json()),
+    health: (nodeURL: string) => fetch(`${nodeURL}/api/v1/node/health`).then(r => r.json()),
+    avds: (nodeURL: string) => fetch(`${nodeURL}/api/v1/discovery/avds`).then(r => r.json()),
+    boot: (nodeURL: string, avdName: string) =>
+      fetch(`${nodeURL}/api/v1/pool/boot`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ avd_name: avdName }) }).then(r => r.json()),
+    shutdown: (nodeURL: string, instanceId: string) =>
+      fetch(`${nodeURL}/api/v1/pool/shutdown`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ instance_id: instanceId }) }).then(r => r.json()),
+  },
 
   // Discovery
   systemImages: () => fetchJSON<{ images: SystemImage[] }>('/discovery/system-images'),

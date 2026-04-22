@@ -60,3 +60,39 @@ tidy:
 
 ## all: Format, vet, test, build
 all: fmt vet test build
+
+# ── Release targets ──────────────────────────────────────────────────────
+
+## release-mac: Build a universal macOS binary (arm64 + amd64)
+release-mac: build-dashboard
+	@mkdir -p bin
+	@echo "→ Building darwin/arm64..."
+	GOOS=darwin GOARCH=arm64 go build -ldflags "$(LDFLAGS)" -o bin/$(BINARY)-darwin-arm64 .
+	@echo "→ Building darwin/amd64..."
+	GOOS=darwin GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o bin/$(BINARY)-darwin-amd64 .
+	@echo "→ Combining with lipo..."
+	lipo -create -output bin/$(BINARY)-darwin-universal bin/$(BINARY)-darwin-arm64 bin/$(BINARY)-darwin-amd64
+	@file bin/$(BINARY)-darwin-universal
+	@echo "✓ Universal binary: bin/$(BINARY)-darwin-universal"
+
+## release-linux: Build Linux binaries (arm64 + amd64) — experimental
+release-linux: build-dashboard
+	@mkdir -p bin
+	GOOS=linux GOARCH=arm64 go build -ldflags "$(LDFLAGS)" -o bin/$(BINARY)-linux-arm64 .
+	GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o bin/$(BINARY)-linux-amd64 .
+	@echo "✓ Linux binaries: bin/$(BINARY)-linux-{arm64,amd64}"
+
+## release: Build all macOS release artifacts + tarballs with checksums
+release: release-mac
+	@mkdir -p dist
+	@cd bin && \
+		tar czf ../dist/$(BINARY)-$(VERSION)-darwin-universal.tar.gz $(BINARY)-darwin-universal && \
+		tar czf ../dist/$(BINARY)-$(VERSION)-darwin-arm64.tar.gz $(BINARY)-darwin-arm64 && \
+		tar czf ../dist/$(BINARY)-$(VERSION)-darwin-amd64.tar.gz $(BINARY)-darwin-amd64
+	@cd dist && shasum -a 256 *.tar.gz > SHA256SUMS
+	@echo ""
+	@echo "✓ Release artifacts in dist/:"
+	@ls -lh dist/
+	@echo ""
+	@echo "SHA256:"
+	@cat dist/SHA256SUMS

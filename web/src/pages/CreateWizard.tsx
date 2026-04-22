@@ -23,7 +23,7 @@ export function CreateWizard({ isModal, onClose }: { isModal?: boolean; onClose?
 
   const loadData = async () => {
     try {
-      const [i, ai, d, a] = await Promise.all([api.systemImages(), api.availableImages(), api.devices(), api.avds()]);
+      const [i, ai, d] = await Promise.all([api.systemImages(), api.availableImages(), api.devices()]);
       setImages(i.images || []); setAvailableImages(ai.images || []);
       setDeviceDefs(enrichDevices(d.devices || []));
       setError('');

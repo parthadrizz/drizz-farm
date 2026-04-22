@@ -13,3 +13,19 @@ dist/
 *.out
 .DS_Store
 vendor/
+
+# Build outputs at repo root (binaries from `make build`)
+/drizz-farm
+/drizz-farm-darwin-*
+/drizz-farm-linux-*
+
+# Cloudflare Worker (server/) — local dev artifacts
+server/node_modules/
+server/.wrangler/
+server/.dev.vars
+
+# Landing site local dev
+site/node_modules/
+
+# Claude Code local settings
+.claude/settings.local.json

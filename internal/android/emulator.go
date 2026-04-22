@@ -66,6 +66,11 @@ func (e *EmulatorController) Boot(ctx context.Context, avdName string, opts Boot
 	if gpu == "" {
 		gpu = "host"
 	}
+	// Headless emulators need software rendering — host GPU requires a window context.
+	// Without this, screencap returns black frames.
+	if opts.NoWindow && (gpu == "host" || gpu == "auto") {
+		gpu = "swiftshader_indirect"
+	}
 	args = append(args, "-gpu", gpu)
 
 	if opts.NoWindow {

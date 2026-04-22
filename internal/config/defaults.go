@@ -47,16 +47,8 @@ func applyDefaults(cfg *Config) {
 		cfg.Node.MetricsPort = 9402
 	}
 
-	// Mesh defaults
-	if cfg.Mesh.ID == "" {
-		cfg.Mesh.ID = generateMeshID()
-	}
-	if cfg.Mesh.Name == "" {
-		cfg.Mesh.Name = cfg.Node.Name // defaults to hostname
-	}
-	if cfg.Mesh.Key == "" {
-		cfg.Mesh.Key = generateMeshKey()
-	}
+	// Mesh: no defaults. Empty mesh config = standalone.
+	// Mesh identity is created explicitly via dashboard or mesh.json.
 
 	// API defaults
 	if cfg.API.Host == "" {
@@ -99,6 +91,10 @@ func applyDefaults(cfg *Config) {
 	if cfg.Network.MDNS.ServiceType == "" {
 		cfg.Network.MDNS.ServiceType = "_drizz-farm._tcp"
 	}
+	// Hostname registration defaults to on when mDNS is enabled
+	if cfg.Network.MDNS.Enabled && !cfg.Network.MDNS.Hostname {
+		cfg.Network.MDNS.Hostname = true
+	}
 
 	// Health check defaults
 	if cfg.HealthCheck.IntervalSeconds == 0 {
@@ -132,7 +128,7 @@ func applyDefaults(cfg *Config) {
 
 	// License defaults
 	if cfg.License.ValidationEndpoint == "" {
-		cfg.License.ValidationEndpoint = "https://license.drizz.dev/v1/validate"
+		cfg.License.ValidationEndpoint = "https://license.drizz.ai/v1/validate"
 	}
 	if cfg.License.GracePeriodHours == 0 {
 		cfg.License.GracePeriodHours = 72
