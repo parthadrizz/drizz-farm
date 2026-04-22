@@ -49,6 +49,17 @@ func init() {
 func runStart(cmd *cobra.Command, args []string) error {
 	startedAt := time.Now()
 
+	// Self-heal: every start runs the same prereq check setup does.
+	// Stored paths in config.yaml are only a cache — if someone deleted
+	// openjdk, yanked the SDK, or broke brew since the last run, we
+	// detect and fix before touching anything else. Cheap in the happy
+	// case (all checks return fast); effective when something's off.
+	fmt.Println("  Verifying prerequisites...")
+	if !EnsurePrereqs(true) {
+		return fmt.Errorf("required prerequisites are missing — see messages above, fix them, and retry")
+	}
+	fmt.Println()
+
 	// Load config
 	cfg, err := config.Load()
 	if err != nil {
