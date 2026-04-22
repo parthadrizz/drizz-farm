@@ -88,13 +88,23 @@ func runSetup(cmd *cobra.Command, args []string) error {
 
 	var required []checkResult
 	required = append(required, runCheck("Package manager", checkPkgMgr, false))
-	required = append(required, runCheck("Java JDK", checkJDK, false))
+	jdk := runCheck("Java JDK", checkJDK, false)
+	required = append(required, jdk)
 	required = append(required, runCheck("Android SDK", checkAndroidSDK, false))
 	required = append(required, runCheck("Android cmdline-tools", checkAndroidCmdlineTools, false))
 	required = append(required, runCheck("Android platform-tools", checkAndroidPlatformTools, false))
 	required = append(required, runCheck("Android Emulator", checkAndroidEmulator, false))
 
-	_ = runCheck("Android system images", checkAndroidSystemImages, true)
+	// sdkmanager is a Java program — probing it with no JDK installed
+	// can hang past its own timeout (Go's CommandContext doesn't always
+	// kill grandchild Java processes on macOS). Skip cleanly when JDK
+	// hasn't been verified working; the post-install re-check will
+	// retry this once we've put a real JDK in place.
+	if jdk.ok {
+		_ = runCheck("Android system images", checkAndroidSystemImages, true)
+	} else {
+		fmt.Printf("  ○ %-28s %s\n", "Android system images", "skipped (JDK missing — will retry after install)")
+	}
 	if runtime.GOOS == "darwin" {
 		_ = runCheck("Xcode CLI Tools", checkXcodeCLI, true)
 	}
@@ -661,6 +671,7 @@ func checkJDK() checkResult {
 	p := findBinary("javac")
 	if p == "" {
 		r.detail = "not found"
+		r.fixCmd = "brew install openjdk@17"
 		return r
 	}
 	// Apple's /usr/bin/javac is a stub that hangs or pops a GUI install
