@@ -115,9 +115,6 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		}
 		fmt.Printf("    → installing: %s\n", fixCmd)
 		installCmd := exec.Command("sh", "-c", fixCmd)
-		// Brew refuses to run with HOMEBREW_NO_AUTO_UPDATE unset via
-		// pipes; also give brew a PATH that includes its own bin so
-		// its subshells can find it.
 		env := append(os.Environ(),
 			"PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
 			"HOMEBREW_NO_AUTO_UPDATE=1",
@@ -128,6 +125,39 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		if err := installCmd.Run(); err != nil {
 			printStatus(label, "✗", fmt.Sprintf("install failed: %v", err))
 			return c
+		}
+
+		// Post-install: if this was the JDK, ask brew where it went and
+		// export JAVA_HOME in our own process. Every later check that
+		// reads JAVA_HOME (findBinary → env path lookup, sdkmanager env)
+		// then picks up the real JDK without playing guess-the-path.
+		if label == "Java JDK" {
+			for _, brewBin := range []string{"/opt/homebrew/bin/brew", "/usr/local/bin/brew"} {
+				if _, err := os.Stat(brewBin); err != nil {
+					continue
+				}
+				for _, formula := range []string{"openjdk@17", "openjdk@21", "openjdk"} {
+					ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+					out, err := exec.CommandContext(ctx, brewBin, "--prefix", formula).Output()
+					cancel()
+					if err != nil {
+						continue
+					}
+					prefix := strings.TrimSpace(string(out))
+					if prefix == "" {
+						continue
+					}
+					// brew --prefix openjdk@17 → /opt/homebrew/opt/openjdk@17
+					// javac lives at $prefix/bin/javac.
+					javacPath := filepath.Join(prefix, "bin", "javac")
+					if _, err := os.Stat(javacPath); err == nil {
+						os.Setenv("JAVA_HOME", prefix)
+						fmt.Printf("    → JAVA_HOME=%s\n", prefix)
+						break
+					}
+				}
+				break
+			}
 		}
 
 		// Verify install worked.
@@ -992,12 +1022,44 @@ func commonSearchPaths(name string) []string {
 			filepath.Join("/usr/local/opt/openjdk/bin", name),
 			filepath.Join("/Library/Java/JavaVirtualMachines/openjdk.jdk/Contents/Home/bin", name),
 		)
+		// Ask brew itself where openjdk lives — handles custom prefixes,
+		// versioned subkegs, and anything we haven't hardcoded.
+		for _, brewBin := range []string{"/opt/homebrew/bin/brew", "/usr/local/bin/brew"} {
+			if _, err := os.Stat(brewBin); err != nil {
+				continue
+			}
+			for _, formula := range []string{"openjdk@17", "openjdk@21", "openjdk"} {
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				out, err := exec.CommandContext(ctx, brewBin, "--prefix", formula).Output()
+				cancel()
+				if err != nil {
+					continue
+				}
+				prefix := strings.TrimSpace(string(out))
+				if prefix != "" {
+					paths = append(paths,
+						filepath.Join(prefix, "bin", name),
+						filepath.Join(prefix, "libexec", "openjdk.jdk", "Contents", "Home", "bin", name),
+					)
+				}
+			}
+			break
+		}
 		// Search all JVMs
 		jvmDir := "/Library/Java/JavaVirtualMachines"
 		entries, _ := os.ReadDir(jvmDir)
 		for _, e := range entries {
 			if e.IsDir() {
 				paths = append(paths, filepath.Join(jvmDir, e.Name(), "Contents", "Home", "bin", name))
+			}
+		}
+		// Brew Cellar glob — catch any version
+		for _, cellar := range []string{"/opt/homebrew/Cellar", "/usr/local/Cellar"} {
+			for _, formula := range []string{"openjdk@17", "openjdk@21", "openjdk"} {
+				matches, _ := filepath.Glob(filepath.Join(cellar, formula, "*", "bin", name))
+				paths = append(paths, matches...)
+				matches2, _ := filepath.Glob(filepath.Join(cellar, formula, "*", "libexec", "openjdk.jdk", "Contents", "Home", "bin", name))
+				paths = append(paths, matches2...)
 			}
 		}
 	}
