@@ -751,35 +751,48 @@ func appendJavaHome(env []string) []string {
 }
 
 // findBinaryNoInstall searches for a binary without attempting to install.
-// For java/javac it verifies the binary actually runs (macOS ships stubs
-// that hang or error), with a 3s timeout so a stub never freezes us.
+// For java/javac we:
+//   - Prefer homebrew/JVM paths first, so we never derive JAVA_HOME from
+//     Apple's /usr/bin stub (even when the stub "works" via delegation,
+//     JAVA_HOME=/usr is garbage that breaks sdkmanager).
+//   - Timebox every probe at 3s so a hanging stub can't freeze the
+//     search.
 func findBinaryNoInstall(name string) string {
-	if p, err := exec.LookPath(name); err == nil {
-		if name == "java" || name == "javac" {
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			cmd := exec.CommandContext(ctx, p, "-version")
-			runErr := cmd.Run()
-			cancel()
-			if runErr == nil {
+	probe := func(p string) bool {
+		if name != "java" && name != "javac" {
+			return true
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		return exec.CommandContext(ctx, p, "-version").Run() == nil
+	}
+
+	// For java/javac, try the real JDK paths BEFORE falling back to the
+	// stub at /usr/bin/{java,javac}. The stub may appear to work, but
+	// derived JAVA_HOME is wrong.
+	if name == "java" || name == "javac" {
+		for _, p := range commonSearchPaths(name) {
+			if _, err := os.Stat(p); err != nil {
+				continue
+			}
+			if probe(p) {
 				return p
 			}
-			// stub / hung / errored — fall through to commonSearchPaths
-		} else {
+		}
+		// last resort: PATH lookup (may still pick up the stub,
+		// but at least we tried the real paths first)
+		if p, err := exec.LookPath(name); err == nil && probe(p) {
 			return p
 		}
+		return ""
+	}
+
+	// Non-Java binaries: LookPath first (PATH is usually the right answer).
+	if p, err := exec.LookPath(name); err == nil {
+		return p
 	}
 	for _, p := range commonSearchPaths(name) {
 		if _, err := os.Stat(p); err == nil {
-			if name == "java" || name == "javac" {
-				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-				cmd := exec.CommandContext(ctx, p, "-version")
-				runErr := cmd.Run()
-				cancel()
-				if runErr == nil {
-					return p
-				}
-				continue
-			}
 			return p
 		}
 	}
@@ -847,6 +860,20 @@ func findBinary(name string) string {
 			candidates := binaryPathsFromRoot(root, name)
 			for _, p := range candidates {
 				if _, err := os.Stat(p); err == nil {
+					return p
+				}
+			}
+		}
+	}
+
+	// For java/javac: prefer real JDK locations BEFORE PATH. Apple's
+	// /usr/bin stub can "work" (delegates to an installed JDK) but
+	// deriving JAVA_HOME from /usr/bin breaks sdkmanager. Always pick
+	// the real homebrew/JVM path when present.
+	if name == "java" || name == "javac" {
+		for _, p := range commonSearchPaths(name) {
+			if _, err := os.Stat(p); err == nil {
+				if verifyBinaryWorks(p) {
 					return p
 				}
 			}
