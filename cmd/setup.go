@@ -63,102 +63,98 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	fmt.Println("  Checking prerequisites...")
 	fmt.Println()
 
-	// Ordered by dependency — each step depends on the previous.
-	// Brew → Java → SDK → cmdline-tools → platform-tools → emulator.
-	// We run each check INLINE and print progress before/after so the
-	// user sees exactly what's happening — never a silent "stuck" UX.
-	runCheck := func(label string, fn func() checkResult, optional bool) checkResult {
-		fmt.Printf("  → %-28s ", label)
+	// Sequential dep chain: each prerequisite is checked, installed if
+	// missing, and verified before we move to the next — because each
+	// step depends on the previous one working.
+	//
+	//   brew  →  javac  →  Android SDK  →  cmdline-tools  →  adb  →  emulator
+	//
+	// sdkmanager and avdmanager are Java programs, so we never probe
+	// them unless JDK verified first — otherwise their stubs hang
+	// past our timeouts (Go CommandContext doesn't reliably kill
+	// grandchild Java processes on macOS).
+	printStatus := func(label, mark, detail string) {
+		fmt.Printf("  %s %-28s %s\n", mark, label, detail)
+	}
+	ensure := func(label string, fn func() checkResult, optional bool) checkResult {
+		fmt.Printf("  → %-28s checking...", label)
 		os.Stdout.Sync()
 		c := fn()
-		mark := "✓"
-		if !c.ok {
-			mark = "✗"
+		fmt.Printf("\r\033[K") // wipe the "checking..." line
+
+		if c.ok {
+			printStatus(label, "✓", c.detail)
+			return c
+		}
+
+		// Failed. Can we auto-install?
+		if c.fixCmd == "" {
+			mark := "✗"
+			extra := ""
 			if optional {
 				mark = "○"
+				extra = " (optional — skipping)"
 			}
+			printStatus(label, mark, c.detail+extra)
+			return c
 		}
-		suffix := c.detail
-		if optional && !c.ok {
-			suffix += " (optional)"
+
+		printStatus(label, "✗", c.detail)
+		fmt.Printf("    → installing: %s\n", c.fixCmd)
+		installCmd := exec.Command("sh", "-c", c.fixCmd)
+		installCmd.Stdout = os.Stdout
+		installCmd.Stderr = os.Stderr
+		if err := installCmd.Run(); err != nil {
+			printStatus(label, "✗", fmt.Sprintf("install failed: %v", err))
+			return c
 		}
-		fmt.Printf("\r  %s %-28s %s\n", mark, label, suffix)
-		return c
-	}
 
-	var required []checkResult
-	required = append(required, runCheck("Package manager", checkPkgMgr, false))
-	jdk := runCheck("Java JDK", checkJDK, false)
-	required = append(required, jdk)
-	required = append(required, runCheck("Android SDK", checkAndroidSDK, false))
-	required = append(required, runCheck("Android cmdline-tools", checkAndroidCmdlineTools, false))
-	required = append(required, runCheck("Android platform-tools", checkAndroidPlatformTools, false))
-	required = append(required, runCheck("Android Emulator", checkAndroidEmulator, false))
-
-	// sdkmanager is a Java program — probing it with no JDK installed
-	// can hang past its own timeout (Go's CommandContext doesn't always
-	// kill grandchild Java processes on macOS). Skip cleanly when JDK
-	// hasn't been verified working; the post-install re-check will
-	// retry this once we've put a real JDK in place.
-	if jdk.ok {
-		_ = runCheck("Android system images", checkAndroidSystemImages, true)
-	} else {
-		fmt.Printf("  ○ %-28s %s\n", "Android system images", "skipped (JDK missing — will retry after install)")
-	}
-	if runtime.GOOS == "darwin" {
-		_ = runCheck("Xcode CLI Tools", checkXcodeCLI, true)
-	}
-
-	allOK := true
-	var failures []checkResult
-	for _, c := range required {
-		if !c.ok {
-			allOK = false
-			failures = append(failures, c)
+		// Verify install worked.
+		fmt.Printf("  → %-28s verifying...", label)
+		os.Stdout.Sync()
+		c2 := fn()
+		fmt.Printf("\r\033[K")
+		if c2.ok {
+			printStatus(label, "✓", c2.detail+" (installed)")
+			return c2
 		}
+		printStatus(label, "✗", "install completed but verification failed: "+c2.detail)
+		return c2
 	}
 
 	fmt.Println()
 	printHardwareCapacity()
+	fmt.Println()
 
+	brew := ensure("Package manager", checkPkgMgr, false)
+	jdk := ensure("Java JDK", checkJDK, false)
+	sdk := ensure("Android SDK", checkAndroidSDK, false)
+	cmdline := ensure("Android cmdline-tools", checkAndroidCmdlineTools, false)
+	adb := ensure("Android platform-tools", checkAndroidPlatformTools, false)
+	emu := ensure("Android Emulator", checkAndroidEmulator, false)
+
+	// Optional — only probe sdkmanager if JDK verified, to avoid Java
+	// grandchild hangs.
+	if jdk.ok {
+		_ = ensure("Android system images", checkAndroidSystemImages, true)
+	} else {
+		printStatus("Android system images", "○", "skipped (needs working JDK)")
+	}
+	if runtime.GOOS == "darwin" {
+		_ = ensure("Xcode CLI Tools", checkXcodeCLI, true)
+	}
+
+	// Aggregate verdict on required prereqs.
+	allOK := true
+	for _, c := range []checkResult{brew, jdk, sdk, cmdline, adb, emu} {
+		if !c.ok {
+			allOK = false
+		}
+	}
 	if !allOK {
-		fmt.Println("\n  Installing missing prerequisites...")
-		for _, f := range failures {
-			if f.fixCmd == "" {
-				fmt.Printf("  ⊘ %-28s (manual install required)\n", f.name)
-				continue
-			}
-			fmt.Printf("\n  → Installing %s\n    $ %s\n", f.name, f.fixCmd)
-			// Stream install output live so the user sees brew/sdkmanager
-			// progress in real time — never a silent multi-minute stall.
-			installCmd := exec.Command("sh", "-c", f.fixCmd)
-			installCmd.Stdout = os.Stdout
-			installCmd.Stderr = os.Stderr
-			if err := installCmd.Run(); err != nil {
-				fmt.Printf("    ✗ Install failed: %s\n", err)
-			} else {
-				fmt.Printf("    ✓ %s installed\n", f.name)
-			}
-		}
-		// Re-check after install
-		fmt.Println("\n  Re-checking...")
-		recheck := []checkResult{
-			checkBrew(), checkJDK(), checkAndroidSDK(),
-			checkAndroidCmdlineTools(), checkAndroidPlatformTools(),
-			checkAndroidEmulator(), checkAndroidSystemImages(),
-		}
-		stillFailing := 0
-		for _, c := range recheck {
-			if !c.ok {
-				stillFailing++
-				fmt.Printf("  ✗ %-28s %s\n", c.name, c.detail)
-			}
-		}
-		if stillFailing > 0 {
-			fmt.Printf("\n  %d prerequisite(s) still missing. Fix manually and run setup again.\n", stillFailing)
-		} else {
-			fmt.Println("  ✓ All prerequisites installed")
-		}
+		fmt.Println("\n  Some prerequisites still missing. Fix manually and re-run 'drizz-farm setup'.")
+	} else {
+		fmt.Println("\n  ✓ All prerequisites installed")
 	}
 
 	// --- Step 3: Save Config ---
@@ -755,22 +751,35 @@ func appendJavaHome(env []string) []string {
 }
 
 // findBinaryNoInstall searches for a binary without attempting to install.
+// For java/javac it verifies the binary actually runs (macOS ships stubs
+// that hang or error), with a 3s timeout so a stub never freezes us.
 func findBinaryNoInstall(name string) string {
 	if p, err := exec.LookPath(name); err == nil {
 		if name == "java" || name == "javac" {
-			// Verify it's not a macOS stub
-			cmd := exec.Command(p, "-version")
-			if err := cmd.Run(); err != nil {
-				// Stub — skip
-			} else {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			cmd := exec.CommandContext(ctx, p, "-version")
+			runErr := cmd.Run()
+			cancel()
+			if runErr == nil {
 				return p
 			}
+			// stub / hung / errored — fall through to commonSearchPaths
 		} else {
 			return p
 		}
 	}
 	for _, p := range commonSearchPaths(name) {
 		if _, err := os.Stat(p); err == nil {
+			if name == "java" || name == "javac" {
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				cmd := exec.CommandContext(ctx, p, "-version")
+				runErr := cmd.Run()
+				cancel()
+				if runErr == nil {
+					return p
+				}
+				continue
+			}
 			return p
 		}
 	}
@@ -911,7 +920,12 @@ func commonSearchPaths(name string) []string {
 	// Java-specific
 	if name == "javac" || name == "java" {
 		paths = append(paths,
+			// Homebrew keg-only installs (openjdk@17, openjdk@21, openjdk)
+			filepath.Join("/opt/homebrew/opt/openjdk@17/bin", name),
+			filepath.Join("/opt/homebrew/opt/openjdk@21/bin", name),
 			filepath.Join("/opt/homebrew/opt/openjdk/bin", name),
+			filepath.Join("/usr/local/opt/openjdk@17/bin", name),
+			filepath.Join("/usr/local/opt/openjdk@21/bin", name),
 			filepath.Join("/usr/local/opt/openjdk/bin", name),
 			filepath.Join("/Library/Java/JavaVirtualMachines/openjdk.jdk/Contents/Home/bin", name),
 		)
