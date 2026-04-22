@@ -26,6 +26,7 @@ server/.dev.vars
 
 # Landing site local dev
 site/node_modules/
+site/.wrangler/
 
 # Claude Code local settings
 .claude/settings.local.json

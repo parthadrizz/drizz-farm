@@ -48,6 +48,7 @@ func (h *registryHandlers) GroupInfo(w http.ResponseWriter, r *http.Request) {
 	snap := h.reg.Snapshot()
 	JSON(w, http.StatusOK, map[string]any{
 		"group_name": snap.GroupName,
+		"group_key":  h.reg.GroupKey(), // dashboard shows masked; eye toggle reveals
 		"has_group":  snap.GroupName != "",
 		"self": map[string]string{
 			"name": h.selfName(),

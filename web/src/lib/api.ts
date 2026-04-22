@@ -68,6 +68,7 @@ export interface NodeEntry {
 
 export interface GroupInfo {
   group_name: string;
+  group_key?: string; // present when this node is in a group; dashboard masks it behind an eye toggle
   has_group: boolean;
   self: { name: string; url: string };
 }

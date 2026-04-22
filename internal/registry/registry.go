@@ -116,6 +116,17 @@ func (r *Registry) VerifyKey(key string) bool {
 	return r.file.GroupKey != "" && r.file.GroupKey == key
 }
 
+// GroupKey returns the raw group key. Exposed via GET /group so the
+// dashboard can render it (masked + copyable). Security boundary is
+// "who can reach the dashboard," not "who knows the key" — the key
+// only authorizes adding/removing nodes in this group's roster, it
+// doesn't grant control of any node's emulators or data.
+func (r *Registry) GroupKey() string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.file.GroupKey
+}
+
 // Nodes returns a copy of the node list.
 func (r *Registry) Nodes() []Node {
 	r.mu.RLock()

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, GroupInfo, NodeList, CreateGroupResult } from '../lib/api';
-import { Wifi, Copy, Check, Server, Trash2 } from 'lucide-react';
+import { Wifi, Copy, Check, Server, Trash2, Eye, EyeOff } from 'lucide-react';
 
 type Section = 'pool' | 'cleanup' | 'health' | 'network' | 'artifacts' | 'node' | 'api' | 'group' | 'raw';
 
@@ -255,6 +255,7 @@ function GroupSection({
   const [joinKey, setJoinKey] = useState('');
   const [joining, setJoining] = useState(false);
   const [joinError, setJoinError] = useState('');
+  const [showKey, setShowKey] = useState(false);
 
   const copy = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -290,6 +291,8 @@ function GroupSection({
 
   // Active group view — list members.
   if (group?.has_group && nodes) {
+    const key = group.group_key || '';
+    const masked = key ? '•'.repeat(Math.min(key.length, 32)) : '';
     return (
       <div className="space-y-4">
         <div className="section-card">
@@ -300,6 +303,33 @@ function GroupSection({
             </div>
             <span className="text-xs text-muted-foreground">{nodes.nodes.length} node{nodes.nodes.length !== 1 ? 's' : ''}</span>
           </div>
+          {key && (
+            <div className="px-5 py-3.5 border-b border-border/50">
+              <div className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1.5">Group key</div>
+              <div className="flex items-center gap-2 surface-0 rounded-lg px-4 py-2.5">
+                <code className="flex-1 text-sm font-mono text-foreground select-all truncate">
+                  {showKey ? key : masked}
+                </code>
+                <button
+                  onClick={() => setShowKey(v => !v)}
+                  className="p-1 rounded hover:bg-surface-2 text-muted-foreground hover:text-foreground"
+                  title={showKey ? 'Hide key' : 'Show key'}
+                >
+                  {showKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                </button>
+                <button
+                  onClick={() => copy(key)}
+                  className="p-1 rounded hover:bg-surface-2 text-muted-foreground hover:text-foreground"
+                  title="Copy key"
+                >
+                  {copied ? <Check className="w-3.5 h-3.5 text-primary" /> : <Copy className="w-3.5 h-3.5" />}
+                </button>
+              </div>
+              <div className="text-[11px] text-muted-foreground mt-1.5">
+                Share with other nodes: <code className="font-mono">drizz-farm join {group.self.url} &lt;key&gt;</code>
+              </div>
+            </div>
+          )}
           <div className="divide-y divide-border/50">
             {nodes.nodes.map(n => (
               <div key={n.name} className="px-5 py-3.5 flex items-center justify-between">
