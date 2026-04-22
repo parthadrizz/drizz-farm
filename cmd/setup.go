@@ -697,10 +697,16 @@ func verifyBinaryWorks(path string) bool {
 	if name != "java" && name != "javac" {
 		return true
 	}
-	// Java/javac: run to catch macOS stubs
+	// Java/javac: run to catch macOS stubs. Apple's /usr/bin/{java,javac}
+	// is a stub that normally errors fast but can hang indefinitely on
+	// some macOS versions (waiting for a GUI install prompt that never
+	// shows). Timebox every probe so setup never freezes.
 	for _, flag := range []string{"-version", "--version"} {
-		cmd := exec.Command(path, flag)
-		if err := cmd.Run(); err == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		cmd := exec.CommandContext(ctx, path, flag)
+		err := cmd.Run()
+		cancel()
+		if err == nil {
 			return true
 		}
 	}
