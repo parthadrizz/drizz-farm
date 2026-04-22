@@ -652,7 +652,18 @@ func checkJDK() checkResult {
 		r.detail = "not found"
 		return r
 	}
-	out, err := exec.Command(p, "-version").CombinedOutput()
+	// Apple's /usr/bin/javac is a stub that hangs or pops a GUI install
+	// dialog on machines without a real JDK. Timebox the version probe
+	// so setup never freezes — if javac doesn't respond in 3s, treat it
+	// as not installed and let the auto-install flow take over.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, p, "-version").CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		r.detail = fmt.Sprintf("not responding (stub at %s) — install a real JDK", p)
+		r.fixCmd = "brew install openjdk@17"
+		return r
+	}
 	if err != nil {
 		r.detail = fmt.Sprintf("broken (%s)", p)
 		return r
