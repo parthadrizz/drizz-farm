@@ -63,40 +63,48 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	fmt.Println("  Checking prerequisites...")
 	fmt.Println()
 
-	// Ordered by dependency — each step depends on the previous
-	// Brew → Java → SDK → cmdline-tools → platform-tools → emulator
-	required := []checkResult{
-		checkPkgMgr(),
-		checkJDK(),
-		checkAndroidSDK(),
-		checkAndroidCmdlineTools(),
-		checkAndroidPlatformTools(),
-		checkAndroidEmulator(),
+	// Ordered by dependency — each step depends on the previous.
+	// Brew → Java → SDK → cmdline-tools → platform-tools → emulator.
+	// We run each check INLINE and print progress before/after so the
+	// user sees exactly what's happening — never a silent "stuck" UX.
+	runCheck := func(label string, fn func() checkResult, optional bool) checkResult {
+		fmt.Printf("  → %-28s ", label)
+		os.Stdout.Sync()
+		c := fn()
+		mark := "✓"
+		if !c.ok {
+			mark = "✗"
+			if optional {
+				mark = "○"
+			}
+		}
+		suffix := c.detail
+		if optional && !c.ok {
+			suffix += " (optional)"
+		}
+		fmt.Printf("\r  %s %-28s %s\n", mark, label, suffix)
+		return c
 	}
-	// Optional — nice to have
-	optional := []checkResult{
-		checkAndroidSystemImages(),
-	}
+
+	var required []checkResult
+	required = append(required, runCheck("Package manager", checkPkgMgr, false))
+	required = append(required, runCheck("Java JDK", checkJDK, false))
+	required = append(required, runCheck("Android SDK", checkAndroidSDK, false))
+	required = append(required, runCheck("Android cmdline-tools", checkAndroidCmdlineTools, false))
+	required = append(required, runCheck("Android platform-tools", checkAndroidPlatformTools, false))
+	required = append(required, runCheck("Android Emulator", checkAndroidEmulator, false))
+
+	_ = runCheck("Android system images", checkAndroidSystemImages, true)
 	if runtime.GOOS == "darwin" {
-		optional = append(optional, checkXcodeCLI())
+		_ = runCheck("Xcode CLI Tools", checkXcodeCLI, true)
 	}
 
 	allOK := true
 	var failures []checkResult
 	for _, c := range required {
-		if c.ok {
-			fmt.Printf("  ✓ %-28s %s\n", c.name, c.detail)
-		} else {
-			fmt.Printf("  ✗ %-28s %s\n", c.name, c.detail)
+		if !c.ok {
 			allOK = false
 			failures = append(failures, c)
-		}
-	}
-	for _, c := range optional {
-		if c.ok {
-			fmt.Printf("  ✓ %-28s %s\n", c.name, c.detail)
-		} else {
-			fmt.Printf("  ○ %-28s %s (optional)\n", c.name, c.detail)
 		}
 	}
 
@@ -110,13 +118,16 @@ func runSetup(cmd *cobra.Command, args []string) error {
 				fmt.Printf("  ⊘ %-28s (manual install required)\n", f.name)
 				continue
 			}
-			fmt.Printf("  → Installing %s...\n", f.name)
-			// Use sh -c to handle quoted args properly
-			out, err := exec.Command("sh", "-c", f.fixCmd).CombinedOutput()
-			if err != nil {
-				fmt.Printf("    FAILED: %s\n    %s\n", err, strings.TrimSpace(string(out)))
+			fmt.Printf("\n  → Installing %s\n    $ %s\n", f.name, f.fixCmd)
+			// Stream install output live so the user sees brew/sdkmanager
+			// progress in real time — never a silent multi-minute stall.
+			installCmd := exec.Command("sh", "-c", f.fixCmd)
+			installCmd.Stdout = os.Stdout
+			installCmd.Stderr = os.Stderr
+			if err := installCmd.Run(); err != nil {
+				fmt.Printf("    ✗ Install failed: %s\n", err)
 			} else {
-				fmt.Printf("    ✓ Done\n")
+				fmt.Printf("    ✓ %s installed\n", f.name)
 			}
 		}
 		// Re-check after install
@@ -838,31 +849,11 @@ func findBinary(name string) string {
 		}
 	}
 
-	// 4. Not found — try to install ONCE (stream output in real time)
-	if cmd, ok := installCmdForBinary[name]; ok && !alreadyInstalled[name] {
-		alreadyInstalled[name] = true
-		fmt.Printf("  → %s not found. Installing...\n", name)
-		installCmd := exec.Command("sh", "-c", cmd)
-		installCmd.Stdout = os.Stdout
-		installCmd.Stderr = os.Stderr
-		err := installCmd.Run()
-		if err != nil {
-			fmt.Printf("    ✗ Install failed. Install manually:\n    %s\n", cmd)
-			return ""
-		}
-		fmt.Printf("    ✓ %s installed\n", name)
-
-		// Search again after install
-		if p, err := exec.LookPath(name); err == nil {
-			if verifyBinaryWorks(p) { return p }
-		}
-		for _, p := range commonSearchPaths(name) {
-			if _, err := os.Stat(p); err == nil {
-				if verifyBinaryWorks(p) { return p }
-			}
-		}
-	}
-
+	// Not found. We DO NOT auto-install here — that used to cause
+	// silent multi-minute brew installs during the "Checking..." phase
+	// with no user feedback. Instead the caller (checkJDK, etc.) reports
+	// the miss with a fixCmd, and setup's install phase runs it visibly
+	// after all checks finish.
 	return ""
 }
 
