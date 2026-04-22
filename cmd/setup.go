@@ -100,8 +100,29 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		}
 
 		printStatus(label, "✗", c.detail)
-		fmt.Printf("    → installing: %s\n", c.fixCmd)
-		installCmd := exec.Command("sh", "-c", c.fixCmd)
+		// Expand bare `brew ...` fix commands to the absolute path — a
+		// brew that was JUST installed in the same setup run isn't on
+		// our process PATH yet, so `sh -c "brew install ..."` would
+		// fail. Explicit path dodges that.
+		fixCmd := c.fixCmd
+		if strings.HasPrefix(fixCmd, "brew ") {
+			for _, brewPath := range []string{"/opt/homebrew/bin/brew", "/usr/local/bin/brew"} {
+				if _, err := os.Stat(brewPath); err == nil {
+					fixCmd = brewPath + strings.TrimPrefix(fixCmd, "brew")
+					break
+				}
+			}
+		}
+		fmt.Printf("    → installing: %s\n", fixCmd)
+		installCmd := exec.Command("sh", "-c", fixCmd)
+		// Brew refuses to run with HOMEBREW_NO_AUTO_UPDATE unset via
+		// pipes; also give brew a PATH that includes its own bin so
+		// its subshells can find it.
+		env := append(os.Environ(),
+			"PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+			"HOMEBREW_NO_AUTO_UPDATE=1",
+		)
+		installCmd.Env = env
 		installCmd.Stdout = os.Stdout
 		installCmd.Stderr = os.Stderr
 		if err := installCmd.Run(); err != nil {
@@ -650,15 +671,26 @@ func checkPkgMgr() checkResult {
 
 func checkBrew() checkResult {
 	r := checkResult{name: "Homebrew"}
-	path, err := exec.LookPath("brew")
-	if err != nil {
-		r.detail = "not found"
-		r.fixCmd = `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`
+	// Try PATH first. If the user just installed brew in the same
+	// session, PATH inside this process may not reflect the shell rc
+	// change yet — fall back to the standard install locations so we
+	// don't falsely flag a working brew as missing.
+	if path, err := exec.LookPath("brew"); err == nil {
+		r.ok = true
+		r.path = path
+		r.detail = path
 		return r
 	}
-	r.ok = true
-	r.path = path
-	r.detail = path
+	for _, candidate := range []string{"/opt/homebrew/bin/brew", "/usr/local/bin/brew"} {
+		if _, err := os.Stat(candidate); err == nil {
+			r.ok = true
+			r.path = candidate
+			r.detail = candidate + " (not on PATH — open a new shell to pick it up)"
+			return r
+		}
+	}
+	r.detail = "not found"
+	r.fixCmd = `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`
 	return r
 }
 
@@ -830,12 +862,16 @@ func findAndVerify(name string) string {
 		// Not found → install
 		return findBinary(name)
 	}
-	// Found → verify it actually runs (with JAVA_HOME available)
-	cmd := exec.Command(p, "--version")
+	// Found → verify it actually runs (with JAVA_HOME available).
+	// Timeboxed at 5s so a broken Java script can't hang setup.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, p, "--version")
 	cmd.Env = appendJavaHome(os.Environ())
 	if err := cmd.Run(); err != nil {
-		// Try -version
-		cmd2 := exec.Command(p, "-version")
+		ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel2()
+		cmd2 := exec.CommandContext(ctx2, p, "-version")
 		cmd2.Env = appendJavaHome(os.Environ())
 		if err2 := cmd2.Run(); err2 != nil {
 			// Found but broken → reinstall
@@ -996,7 +1032,11 @@ func checkAndroidPlatformTools() checkResult {
 		r.detail = "not installed"
 		return r
 	}
-	out, _ := exec.Command(adb, "version").CombinedOutput()
+	// Timeboxed — a corrupt/broken adb has been known to spin on first
+	// invocation while it tries to spawn the daemon.
+	ctxAdb, cancelAdb := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelAdb()
+	out, _ := exec.CommandContext(ctxAdb, adb, "version").CombinedOutput()
 	lines := strings.Split(string(out), "\n")
 	ver := ""
 	if len(lines) > 0 {
@@ -1021,7 +1061,11 @@ func checkAndroidEmulator() checkResult {
 		r.detail = "not installed"
 		return r
 	}
-	out, _ := exec.Command(emulator, "-version").CombinedOutput()
+	// Timeboxed — `emulator -version` is normally <1s but a broken
+	// install could stall (e.g. missing libs prompting a dialog).
+	ctxEmu, cancelEmu := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelEmu()
+	out, _ := exec.CommandContext(ctxEmu, emulator, "-version").CombinedOutput()
 	ver := ""
 	for _, line := range strings.Split(string(out), "\n") {
 		if strings.Contains(line, "emulator version") {
