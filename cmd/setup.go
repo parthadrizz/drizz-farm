@@ -998,10 +998,19 @@ func checkAndroidSystemImages() checkResult {
 		r.detail = "sdkmanager not found (install cmdline-tools first)"
 		return r
 	}
-	// sdkmanager needs JAVA_HOME and --sdk_root
-	cmd := exec.Command(sdkmanager, "--sdk_root="+sdkRoot, "--list_installed")
+	// sdkmanager is a shell script that shells out to `java`. On a Mac
+	// with no real JDK, that hits Apple's /usr/bin/java stub and hangs.
+	// Timebox the probe so setup never freezes; treat timeout/error as
+	// "no images" and let the user install them from the dashboard.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, sdkmanager, "--sdk_root="+sdkRoot, "--list_installed")
 	cmd.Env = appendJavaHome(os.Environ())
 	out, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		r.detail = "sdkmanager not responding (install JDK + retry)"
+		return r
+	}
 	if err != nil {
 		r.detail = "sdkmanager failed (Java may be missing)"
 		return r
