@@ -40,6 +40,19 @@ drizz-farm setup       # one-time: detect Android SDK, install as launchd servic
 
 Setup auto-installs a launchd service so the daemon starts at login. Dashboard at `http://<hostname>.local:9401`.
 
+### macOS firewall prompt (first run)
+
+The first time drizz-farm or an emulator accepts an incoming connection, macOS shows an **"Application Firewall"** dialog asking whether to allow it. Clicking **Allow** once is enough — the prompt doesn't come back.
+
+If you're rolling out to many Macs and want to skip the prompt, pre-authorize during provisioning (requires one `sudo`):
+
+```bash
+sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add /usr/local/bin/drizz-farm
+sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp /usr/local/bin/drizz-farm
+```
+
+These commands are safe to re-run and no-op if the binary is already registered. Once we code-sign and notarize the release builds (planned for v0.9), the firewall + Gatekeeper prompts go away entirely.
+
 ## Quickstart
 
 ### 1. First Mac — run `setup`

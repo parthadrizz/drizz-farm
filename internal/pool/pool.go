@@ -178,20 +178,36 @@ func (p *Pool) Stop(ctx context.Context) error {
 	}
 	p.mu.Unlock()
 
-	log.Info().Int("instances", len(instances)).Msg("pool: stopping")
+	log.Info().Int("instances", len(instances)).Msg("pool: stopping (parallel)")
+
+	// Destroy all instances in parallel — sequential shutdown with N
+	// emulators and 10s SIGTERM waits stacks up past the 30s shutdown
+	// budget. Each goroutine runs its own destroy so they run
+	// concurrently; errors are collected via a channel.
+	errCh := make(chan error, len(instances))
+	var wg sync.WaitGroup
+	for _, inst := range instances {
+		inst := inst
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if inst.Device != nil && inst.Device.CanDestroy() {
+				if err := p.destroyInstance(ctx, inst); err != nil {
+					errCh <- err
+				}
+			} else {
+				// USB devices — just remove from pool, don't shut down.
+				p.removeInstance(inst.ID)
+			}
+		}()
+	}
+	wg.Wait()
+	close(errCh)
 
 	var errs []error
-	for _, inst := range instances {
-		if inst.Device != nil && inst.Device.CanDestroy() {
-			if err := p.destroyInstance(ctx, inst); err != nil {
-				errs = append(errs, err)
-			}
-		} else {
-			// USB devices — just remove from pool, don't shut down
-			p.removeInstance(inst.ID)
-		}
+	for err := range errCh {
+		errs = append(errs, err)
 	}
-
 	if len(errs) > 0 {
 		return fmt.Errorf("pool: %d errors during shutdown", len(errs))
 	}

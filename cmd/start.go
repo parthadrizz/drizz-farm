@@ -289,8 +289,35 @@ func runStart(cmd *cobra.Command, args []string) error {
 	}
 
 	cancel()
+
+	// Belt-and-suspenders: if any emulator/scrcpy/qemu child survived
+	// pool.Stop (rare, but possible on a forced timeout or an adb
+	// hang), reap them here before we exit. Same sweep logic the
+	// `drizz-farm stop` command runs.
+	sweepDaemonOrphans()
+
 	log.Info().Dur("uptime", time.Since(startedAt)).Msg("drizz-farm stopped")
 	return nil
+}
+
+// sweepDaemonOrphans kills leftover child processes on daemon exit.
+// Called after pool.Stop as a last-mile safety net — if any emulator
+// or streaming helper survived the normal cleanup path, we reap it
+// so the user isn't left with a zombie qemu/scrcpy after `drizz-farm
+// stop` or a terminal Ctrl+C.
+func sweepDaemonOrphans() {
+	uid := fmt.Sprintf("%d", os.Getuid())
+	targets := []string{"qemu-system-aarch64", "qemu-system-x86_64", "crashpad_handler", "scrcpy"}
+	for _, name := range targets {
+		if out, _ := exec.Command("pgrep", "-U", uid, "-f", name).Output(); len(out) > 0 {
+			_ = exec.Command("pkill", "-9", "-U", uid, "-f", name).Run()
+			log.Info().Str("name", name).Msg("shutdown: reaped orphaned child")
+		}
+	}
+	if out, _ := exec.Command("pgrep", "-U", uid, "-x", "emulator").Output(); len(out) > 0 {
+		_ = exec.Command("pkill", "-9", "-U", uid, "-x", "emulator").Run()
+		log.Info().Msg("shutdown: reaped orphaned emulator")
+	}
 }
 
 func getLANIP() string {
