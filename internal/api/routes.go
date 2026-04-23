@@ -54,6 +54,11 @@ func RegisterRoutes(r chi.Router, cfg *config.Config, p *pool.Pool, b *session.B
 
 	// Appium-compat server — lets existing Appium clients use drizz-farm
 	// as a drop-in hub by pointing at /wd/hub/session. See handlers_appium.go.
+	// /status and /sessions satisfy client server-probes so that driver
+	// init doesn't 404 on clients that check before session create
+	// (notably appium-java-client and the TestNG listener integrations).
+	r.Get("/wd/hub/status", appH.Status)
+	r.Get("/wd/hub/sessions", appH.Sessions)
 	r.Post("/wd/hub/session", appH.Create)
 	r.HandleFunc("/wd/hub/session/{sid}/*", appH.Proxy)
 	r.HandleFunc("/wd/hub/session/{sid}", appH.Proxy)

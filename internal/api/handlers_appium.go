@@ -61,6 +61,45 @@ func newAppiumCompatHandlers(b *session.Broker) *appiumCompatHandlers {
 	}
 }
 
+// ---- GET /wd/hub/status + /wd/hub/sessions --------------------------
+//
+// Some Appium clients (notably appium-java-client's AppiumDriver,
+// certain node.js clients) probe `/wd/hub/status` at driver init to
+// confirm the server is an Appium-compatible hub. Without this,
+// drivers print a warning + sometimes hard-fail. We return a minimal
+// W3C-shaped status so those probes succeed; the real Appium server
+// behind a session is still reached via the per-session proxy below.
+
+func (h *appiumCompatHandlers) Status(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"value": map[string]any{
+			"ready":   true,
+			"message": "drizz-farm Appium-compat ready",
+			"build":   map[string]any{"version": "0.1.22"},
+		},
+	})
+}
+
+// Sessions lists active sessions in the WebDriver-style wrapper. Some
+// test orchestrators call this to discover in-flight sessions (e.g.
+// for cleanup after a crash). Returns only sessions we're tracking
+// via our sid mapping, shaped like a WD GET /sessions response.
+func (h *appiumCompatHandlers) Sessions(w http.ResponseWriter, r *http.Request) {
+	h.mu.RLock()
+	sids := make([]map[string]any, 0, len(h.sidMapping))
+	for appiumSID, drizzSID := range h.sidMapping {
+		sids = append(sids, map[string]any{
+			"id":           appiumSID,
+			"drizz_id":     drizzSID,
+			"capabilities": map[string]any{},
+		})
+	}
+	h.mu.RUnlock()
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"value": sids})
+}
+
 // ---- POST /wd/hub/session -------------------------------------------
 
 type wdCreateReq struct {

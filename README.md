@@ -180,6 +180,8 @@ drizz-farm allocates the device, spawns Appium behind the scenes, and transparen
 
 `drizz:*` capabilities map 1:1 to session options — `profile`, `device_id`, `avd_name`, `record_video`, `capture_logcat`, `capture_screenshots`, `capture_network`, `retention_hours`, `timeout_minutes`.
 
+**Migrating an existing Appium suite?** Step-by-step guide for Python, Java, JS, Ruby, C# — all clients, all frameworks (including pytest, JUnit 5, TestNG) — in **[docs/APPIUM-MIGRATION.md](./docs/APPIUM-MIGRATION.md)**. In most cases it's a single-line URL change and your test code is untouched.
+
 ## Deployment modes
 
 Same binary, three ways to deploy:
