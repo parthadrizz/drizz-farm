@@ -31,7 +31,15 @@ import (
 	"github.com/drizz-dev/drizz-farm/internal/telemetry"
 )
 
-var visibleEmulators bool
+// Two flags for the same setting so users can opt either way:
+//   --visible (default true) — show emulator windows
+//   --headless              — hide them (for multi-emulator Mac mini
+//                              farms where 10 windows would be chaos)
+// Config-file value `visible_emulators` wins when neither flag is set.
+var (
+	visibleEmulators  bool
+	headlessEmulators bool
+)
 
 var startCmd = &cobra.Command{
 	Use:   "start",
@@ -43,7 +51,8 @@ Idle emulators shut down automatically after the configured timeout.`,
 }
 
 func init() {
-	startCmd.Flags().BoolVar(&visibleEmulators, "visible", false, "show emulator windows (for development/debugging)")
+	startCmd.Flags().BoolVar(&visibleEmulators, "visible", true, "show emulator windows (default: true)")
+	startCmd.Flags().BoolVar(&headlessEmulators, "headless", false, "hide emulator windows — for multi-emulator setups on dedicated hosts")
 	rootCmd.AddCommand(startCmd)
 }
 
@@ -142,9 +151,17 @@ func runStart(cmd *cobra.Command, args []string) error {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	// Apply CLI overrides
-	if visibleEmulators {
+	// CLI flags override config.yaml. --headless wins over --visible
+	// because opting OUT is the more explicit intent.
+	switch {
+	case headlessEmulators:
+		cfg.Pool.VisibleEmulators = false
+		log.Info().Msg("emulator windows will be hidden (--headless)")
+	case visibleEmulators:
 		cfg.Pool.VisibleEmulators = true
-		log.Info().Msg("emulator windows will be visible (--visible flag)")
+	}
+	if cfg.Pool.VisibleEmulators {
+		log.Info().Msg("emulator windows will be visible (pass --headless to hide)")
 	}
 
 	// SQLite store
