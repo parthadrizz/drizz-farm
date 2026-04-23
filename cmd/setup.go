@@ -527,6 +527,14 @@ func saveSetupConfig(meshName, meshKey string) error {
 		}
 	}
 
+	// Populate every unset field with its real default BEFORE we
+	// serialize. Without this, zero-valued fields land in the yaml as
+	// `session_timeout_minutes: 0` etc., which reads like a broken
+	// config — runtime code falls back to defaults-on-read, but the
+	// file on disk looks wrong. ApplyDefaults is idempotent so any
+	// value we set earlier (SDK paths, MaxConcurrent) survives.
+	config.ApplyDefaults(&cfg)
+
 	// Write config
 	data, err := yaml.Marshal(&cfg)
 	if err != nil {

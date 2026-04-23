@@ -27,6 +27,15 @@ func generateMeshKey() string {
 	return hex.EncodeToString(b)
 }
 
+// ApplyDefaults fills every zero-valued field in cfg with its
+// default. Exported so callers like `drizz-farm setup` can use it
+// before marshaling a fresh config — otherwise the yaml on disk
+// ends up with bare `session_timeout_minutes: 0` etc., which looks
+// broken even though runtime code treats 0 as "use default."
+func ApplyDefaults(cfg *Config) {
+	applyDefaults(cfg)
+}
+
 func applyDefaults(cfg *Config) {
 	// Node defaults
 	if cfg.Node.Name == "" {
