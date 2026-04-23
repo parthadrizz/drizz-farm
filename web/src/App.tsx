@@ -5,11 +5,13 @@ import { Sessions } from './pages/Sessions';
 import { Settings } from './pages/Settings';
 import { LiveView } from './pages/LiveView';
 import { GridView } from './pages/GridView';
+import { Nodes } from './pages/Nodes';
 
 const navItems = [
   { to: '/', label: 'Dashboard', end: true },
   { to: '/grid', label: 'Live Grid' },
   { to: '/sessions', label: 'Sessions' },
+  { to: '/nodes', label: 'Nodes' },
   { to: '/settings', label: 'Settings' },
 ];
 
@@ -38,6 +40,7 @@ function App() {
             <Route path="/create" element={<CreateWizard />} />
             <Route path="/sessions" element={<Sessions />} />
             <Route path="/settings" element={<Settings />} />
+            <Route path="/nodes" element={<Nodes />} />
             <Route path="/grid" element={<GridView />} />
             <Route path="/live/:id" element={<LiveView />} />
           </Routes>
