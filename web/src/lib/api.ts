@@ -180,8 +180,26 @@ export const api = {
   systemImages: () => fetchJSON<{ images: SystemImage[] }>('/discovery/system-images'),
   availableImages: () => fetchJSON<{ images: SystemImage[] }>('/discovery/available-images'),
   installImage: (path: string) => fetchJSON<{ status: string }>('/discovery/install-image', { method: 'POST', body: JSON.stringify({ path }) }),
+  // Streaming install — returns a fetch Response so the caller can read
+  // the body as a ReadableStream and surface real-time sdkmanager
+  // output. Last line is __STATUS__:ok or __STATUS__:error: <msg>.
+  installImageStream: (path: string) =>
+    fetch('/api/v1/discovery/install-image-stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path }),
+    }),
   devices: () => fetchJSON<{ devices: string[] }>('/discovery/devices'),
   avds: () => fetchJSON<{ avds: { name: string }[] }>('/discovery/avds'),
-  createAVDs: (data: { profile_name: string; device: string; system_image: string; count: number }) =>
+  createAVDs: (data: {
+    profile_name: string;
+    device: string;
+    system_image: string;
+    count: number;
+    ram_mb?: number;
+    heap_mb?: number;
+    disk_size_mb?: number;
+    gpu?: string;
+  }) =>
     fetchJSON<{ created: number; errors: string[] }>('/discovery/create-avds', { method: 'POST', body: JSON.stringify(data) }),
 };

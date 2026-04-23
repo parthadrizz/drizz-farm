@@ -113,6 +113,85 @@ func (h *discoveryHandlers) AvailableImages(w http.ResponseWriter, r *http.Reque
 	JSON(w, http.StatusOK, map[string]any{"images": resp})
 }
 
+// InstallImageStream handles POST /api/v1/discovery/install-image-stream.
+// Streams sdkmanager output line-by-line as plain text/chunked so the
+// dashboard can show real-time progress for the (often multi-minute)
+// system image download. Each line flushed immediately.
+//
+// Last line is always one of:
+//   __STATUS__:ok
+//   __STATUS__:error: <message>
+// so the client can detect completion without parsing sdkmanager output.
+func (h *discoveryHandlers) InstallImageStream(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Path == "" {
+		JSON(w, http.StatusBadRequest, ErrorResponse{
+			Error: "invalid_request", Message: "path is required", Code: 400,
+		})
+		return
+	}
+	sdkManager := h.sdk.SDKManagerPath()
+	if sdkManager == "" {
+		JSON(w, http.StatusInternalServerError, ErrorResponse{
+			Error: "install_failed", Message: "sdkmanager not found", Code: 500,
+		})
+		return
+	}
+
+	// Tell intermediaries (CF, nginx) not to buffer.
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		JSON(w, http.StatusInternalServerError, ErrorResponse{
+			Error: "no_flush", Message: "streaming not supported by HTTP responder", Code: 500,
+		})
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+
+	cmd := exec.CommandContext(r.Context(), "sh", "-c",
+		fmt.Sprintf("yes | %s --sdk_root=%s --install '%s'", sdkManager, h.sdk.Root, req.Path))
+	if javaPath := h.cfg.SDK.Java; javaPath != "" {
+		javaHome := filepath.Dir(filepath.Dir(javaPath))
+		cmd.Env = append(os.Environ(), "JAVA_HOME="+javaHome)
+	}
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		fmt.Fprintf(w, "__STATUS__:error: pipe stdout: %v\n", err)
+		flusher.Flush()
+		return
+	}
+	cmd.Stderr = cmd.Stdout // merge stderr into the same stream
+	if err := cmd.Start(); err != nil {
+		fmt.Fprintf(w, "__STATUS__:error: start sdkmanager: %v\n", err)
+		flusher.Flush()
+		return
+	}
+
+	buf := make([]byte, 4096)
+	for {
+		n, err := stdout.Read(buf)
+		if n > 0 {
+			w.Write(buf[:n])
+			flusher.Flush()
+		}
+		if err != nil {
+			break
+		}
+	}
+	if err := cmd.Wait(); err != nil {
+		fmt.Fprintf(w, "\n__STATUS__:error: %v\n", err)
+	} else {
+		fmt.Fprintln(w, "\n__STATUS__:ok")
+	}
+	flusher.Flush()
+}
+
 // InstallImage handles POST /api/v1/discovery/install-image
 func (h *discoveryHandlers) InstallImage(w http.ResponseWriter, r *http.Request) {
 	var req struct {
@@ -160,6 +239,11 @@ type createAVDsRequest struct {
 	Device      string `json:"device"`
 	SystemImage string `json:"system_image"`
 	Count       int    `json:"count"`
+	// Optional resource overrides — sane defaults applied when zero.
+	RAMMB      int    `json:"ram_mb,omitempty"`
+	HeapMB     int    `json:"heap_mb,omitempty"`
+	DiskSizeMB int    `json:"disk_size_mb,omitempty"`
+	GPU        string `json:"gpu,omitempty"`
 }
 
 // CreateAVDs handles POST /api/v1/discovery/create-avds
@@ -179,10 +263,23 @@ func (h *discoveryHandlers) CreateAVDs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Apply defaults, then layer per-request overrides.
 	profile := config.AndroidProfile{
 		Device:      req.Device,
 		SystemImage: req.SystemImage,
 		RAMMB:       2048,
+	}
+	if req.RAMMB > 0 {
+		profile.RAMMB = req.RAMMB
+	}
+	if req.HeapMB > 0 {
+		profile.HeapMB = req.HeapMB
+	}
+	if req.DiskSizeMB > 0 {
+		profile.DiskSizeMB = req.DiskSizeMB
+	}
+	if req.GPU != "" {
+		profile.GPU = req.GPU
 	}
 
 	avdMgr := android.NewAVDManager(h.sdk, h.runner)
