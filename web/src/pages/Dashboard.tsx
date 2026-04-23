@@ -110,36 +110,55 @@ export function Dashboard() {
     </div>
   );
 
-  // Aggregate stats across all online nodes.
-  // Capacity = actual devices (AVDs + USB), not the config slot limit.
-  let totalDevices = 0;
-  let totalAvailable = 0;
+  // Aggregate stats across all online nodes. The shape here matters
+  // for UX — the OLD layout had a single "Capacity" field that was
+  // secretly MaxConcurrent (RAM-constrained slot limit), not the
+  // count of devices users can see. People read "Capacity: 1" as
+  // "you only have one device" when they actually have eight AVDs
+  // waiting to be booted.
+  //
+  // New semantics:
+  //   Devices    = AVDs + USB phones across all online nodes
+  //                (what the user actually owns)
+  //   Running    = state ∈ {warm, allocated, booting}
+  //                (currently using host RAM)
+  //   Max slots  = sum of each node's MaxConcurrent cap
+  //                (ceiling on "Running" — the RAM budget)
+  //   Available  = Running - Allocated - Booting
+  //                (warm, ready to take a session right now)
+  let totalDevices = 0;       // AVDs + USB, all online nodes
   let totalAllocated = 0;
   let totalBooting = 0;
+  let totalWarm = 0;
   let totalError = 0;
+  let totalMaxSlots = 0;      // sum of MaxConcurrent
 
   nodes.forEach(n => {
     if (!n.online || !n.pool) return;
     const avds = n.avds?.length || 0;
     const usb = n.pool.instances.filter(i => i.device_kind === 'android_usb').length;
-    const devices = avds + usb;
-    const cap = Math.min(n.pool.total_capacity, devices);
-    totalDevices += cap;
+    totalDevices += avds + usb;
     totalAllocated += n.pool.allocated;
     totalBooting += n.pool.booting;
+    totalWarm += n.pool.warm;
     totalError += n.pool.error;
-    totalAvailable += Math.max(0, cap - n.pool.allocated - n.pool.booting);
+    totalMaxSlots += n.pool.total_capacity;
   });
 
   const onlineCount = nodes.filter(n => n.online).length;
+  const totalNodes = nodes.length;
 
   const stats = [
-    { label: 'Nodes', value: onlineCount, color: 'text-purple-400' },
-    { label: 'Capacity', value: totalDevices },
-    { label: 'Available', value: totalAvailable, color: 'text-primary' },
+    {
+      label: 'Nodes',
+      value: onlineCount === totalNodes ? String(totalNodes) : `${onlineCount}/${totalNodes}`,
+      color: 'text-purple-400',
+    },
+    { label: 'Devices', value: totalDevices },
+    { label: 'Available', value: totalWarm, color: 'text-primary' },
     { label: 'Allocated', value: totalAllocated, color: 'text-accent' },
     { label: 'Booting', value: totalBooting, color: 'text-status-booting' },
-    { label: 'Error', value: totalError, color: 'text-destructive' },
+    { label: 'Max slots', value: totalMaxSlots, color: 'text-muted-foreground' },
   ];
 
   const selfHealth = nodes.find(n => n.entry.name === selfName)?.health;
