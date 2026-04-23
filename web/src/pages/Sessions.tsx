@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
+import { Activity } from 'lucide-react';
 import { api, Session } from '../lib/api';
 import { StatusBadge, StatusDot } from '../components/StatusBadge';
+import { EmptyState } from '../components/EmptyState';
 
 type Filter = 'all' | 'active' | 'queued' | 'released' | 'timed_out';
 
@@ -96,8 +98,17 @@ export function Sessions() {
       {error && <div className="text-destructive text-sm">{error}</div>}
 
       {filtered.length === 0 ? (
-        <div className="section-card p-12 text-center text-muted-foreground">
-          {filter === 'all' ? 'No sessions yet.' : `No ${filter} sessions.`}
+        <div className="section-card">
+          <EmptyState
+            icon={Activity}
+            title={filter === 'all' ? 'No sessions yet' : `No ${filter} sessions`}
+            description={
+              filter === 'all'
+                ? 'Sessions are how you reserve a device for a test run. Start one from your test framework, the MCP server, or POST /api/v1/sessions.'
+                : 'Switch the filter above to see other states.'
+            }
+            secondary={filter === 'all' ? { label: 'Sessions API docs', href: 'https://github.com/parthadrizz/drizz-farm#cli-reference' } : undefined}
+          />
         </div>
       ) : (
         <div className="section-card divide-y divide-border/50">

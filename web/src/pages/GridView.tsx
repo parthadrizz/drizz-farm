@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
+import { Tv } from 'lucide-react';
 import { api, DeviceInstance } from '../lib/api';
+import { EmptyState } from '../components/EmptyState';
 
 // Flattened list of live devices across all nodes, each tagged with its node URL
 // so the screen stream connects directly to the right daemon.
@@ -48,9 +50,19 @@ export function GridView() {
   );
 
   if (live.length === 0) return (
-    <div className="text-center py-24 animate-fade-in">
-      <div className="text-foreground text-base mb-2">No live devices</div>
-      <div className="text-muted-foreground text-sm">Start an emulator from the Dashboard to see it here.</div>
+    <div className="section-card">
+      <EmptyState
+        icon={Tv}
+        title="No live devices"
+        description={
+          <>
+            Boot an emulator from the <Link to="/" className="text-primary hover:underline">Dashboard</Link> to see its
+            screen mirrored here in real time. Click any tile to open a full-screen
+            interactive view with input + recording.
+          </>
+        }
+        primary={{ label: 'Go to Dashboard', to: '/' }}
+      />
     </div>
   );
 

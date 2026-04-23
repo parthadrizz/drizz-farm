@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Server, Wifi, Plus } from 'lucide-react';
+import { Server, Wifi, Plus, Smartphone } from 'lucide-react';
 import { api, PoolStatus, NodeHealth, DeviceInstance, NodeEntry } from '../lib/api';
 import { StatusBadge } from '../components/StatusBadge';
 import { ActionButton } from '../components/ActionButton';
+import { EmptyState } from '../components/EmptyState';
 import { CreateWizard } from './CreateWizard';
 
 // Per-node snapshot the dashboard assembles by talking to each node directly.
@@ -142,6 +143,47 @@ export function Dashboard() {
 
   const selfHealth = nodes.find(n => n.entry.name === selfName)?.health;
 
+  // First-run hero: nothing exists yet on any node. Replace the
+  // sad-blank-table experience with a friendly welcome + CTA.
+  const totalAVDsAcrossNodes = nodes.reduce((acc, n) => acc + (n.avds?.length || 0), 0);
+  const totalUSBAcrossNodes = nodes.reduce(
+    (acc, n) => acc + (n.pool?.instances.filter(i => i.device_kind === 'android_usb').length || 0),
+    0,
+  );
+  if (totalAVDsAcrossNodes === 0 && totalUSBAcrossNodes === 0) {
+    return (
+      <div className="space-y-5 animate-fade-in">
+        <div className="section-card">
+          <EmptyState
+            icon={Smartphone}
+            title="Welcome to drizz-farm"
+            description={
+              <>
+                You don't have any emulators yet. Create your first one to start running
+                tests, recording sessions, and streaming devices to your team.
+              </>
+            }
+            primary={{ label: 'Create your first emulator', icon: Plus, onClick: () => setShowCreateModal(true) }}
+            secondary={{ label: 'Read the quickstart', href: 'https://github.com/parthadrizz/drizz-farm#quickstart' }}
+          />
+        </div>
+        {/* Slide-out create panel (mirrors the standard layout below) */}
+        <div className={`fixed inset-y-0 right-0 z-50 transition-transform duration-300 ease-in-out ${showCreateModal ? 'translate-x-0' : 'translate-x-full'}`}
+          style={{ width: 'min(560px, 90vw)' }}>
+          {showCreateModal && (
+            <div className="fixed inset-0 -z-10" style={{ background: 'hsl(var(--surface-0) / 0.6)' }}
+              onClick={() => setShowCreateModal(false)} />
+          )}
+          <div className="h-full surface-1 border-l border-border flex flex-col shadow-2xl">
+            <div className="flex-1 overflow-y-auto p-6">
+              {showCreateModal && <CreateWizard onClose={() => { setShowCreateModal(false); refresh(); }} />}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-5 animate-fade-in">
       {/* Stats header */}
@@ -274,7 +316,17 @@ function NodeSection({
 
       <div className="divide-y divide-border/50">
         {rows.length === 0 ? (
-          <div className="p-8 text-center text-sm text-muted-foreground">No devices</div>
+          <EmptyState
+            compact
+            icon={Smartphone}
+            title="No devices on this node yet"
+            description={
+              isSelf
+                ? 'Create an AVD or plug in a USB phone to get started.'
+                : 'This node has no AVDs configured yet.'
+            }
+            primary={isSelf ? { label: 'Add device', icon: Plus, onClick: onAdd } : undefined}
+          />
         ) : rows.map(({ name, displayName, inst, state }) => (
           <div key={name} className="px-5 py-3 flex items-center gap-4 card-hover group animate-slide-in">
             <div className="flex-1 min-w-0">
