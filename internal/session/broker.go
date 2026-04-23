@@ -27,6 +27,14 @@ var (
 
 // Broker manages session lifecycle — allocation, release, timeout enforcement,
 // and request queueing when the device pool is exhausted.
+// CaptureService is the subset of internal/capture.Service the broker
+// needs. Declared here as an interface to avoid an import cycle.
+type CaptureService interface {
+	StartVideo(sessionID, serial string) error
+	StartLogcat(sessionID, serial string) error
+	StopAll(sessionID string)
+}
+
 type Broker struct {
 	mu       sync.RWMutex       // protects sessions map
 	sessions map[string]*Session // all sessions keyed by session ID
@@ -38,10 +46,18 @@ type Broker struct {
 	store    *store.Store        // SQLite persistence layer
 	webhook  *webhook.Sender     // outbound webhook dispatcher
 	appium   *appium.Manager     // manages per-session Appium servers
+	capture  CaptureService      // optional — handles declarative per-session capture
 	hostIP   string              // detected LAN IP used in connection info
 	readyCh  chan struct{}       // signaled by pool when an emulator becomes warm
 
 	cancel context.CancelFunc // cancels background goroutines
+}
+
+// SetCaptureService wires the declarative capture subsystem. If unset,
+// sessions with RecordVideo / CaptureLogcat capabilities just log a
+// warning (the flag is preserved for clients but nothing runs).
+func (b *Broker) SetCaptureService(c CaptureService) {
+	b.capture = c
 }
 
 // NewBroker creates a new session broker.
@@ -200,6 +216,12 @@ func (b *Broker) Release(ctx context.Context, id string) error {
 		b.store.RecordEvent("session_released", sess.InstanceID, sess.ID, fmt.Sprintf("duration=%s", now.Sub(sess.CreatedAt)))
 	}
 
+	// Stop any declarative captures — video is finalized + pulled,
+	// logcat is flushed. Errors logged inside the capture service.
+	if b.capture != nil {
+		b.capture.StopAll(id)
+	}
+
 	// Stop Appium server
 	b.appium.Stop(id)
 
@@ -294,19 +316,20 @@ func (b *Broker) createSessionFromInstance(inst *pool.DeviceInstance, req Create
 	conn.NodeName = b.nodeName
 
 	sess := &Session{
-		ID:         sessionID,
-		NodeName:   b.nodeName,
-		Profile:    req.Profile,
-		Platform:   req.Platform,
-		InstanceID: inst.ID,
-		State:      SessionActive,
-		Connection: conn,
-		ClientID:   req.ClientID,
-		ClientName: req.ClientName,
-		Source:     req.Source,
-		Labels:     req.Labels,
-		CreatedAt:  time.Now(),
-		ExpiresAt:  time.Now().Add(timeout),
+		ID:           sessionID,
+		NodeName:     b.nodeName,
+		Profile:      req.Profile,
+		Platform:     req.Platform,
+		InstanceID:   inst.ID,
+		State:        SessionActive,
+		Connection:   conn,
+		ClientID:     req.ClientID,
+		ClientName:   req.ClientName,
+		Source:       req.Source,
+		Labels:       req.Labels,
+		CreatedAt:    time.Now(),
+		ExpiresAt:    time.Now().Add(timeout),
+		Capabilities: req.Capabilities,
 	}
 
 	inst.SetSession(sessionID)
@@ -314,6 +337,28 @@ func (b *Broker) createSessionFromInstance(inst *pool.DeviceInstance, req Create
 	b.mu.Lock()
 	b.sessions[sessionID] = sess
 	b.mu.Unlock()
+
+	// Declarative capture — fire up video / logcat tailers based on
+	// the session's requested capabilities. Best-effort: a capture
+	// failure is logged but doesn't fail session creation.
+	if req.Capabilities != nil && b.capture != nil && inst.Device != nil {
+		serial := inst.Device.Serial()
+		if req.Capabilities.RecordVideo {
+			if err := b.capture.StartVideo(sessionID, serial); err != nil {
+				log.Warn().Err(err).Str("session", sessionID).Msg("broker: video capture start failed")
+			}
+		}
+		if req.Capabilities.CaptureLogcat {
+			if err := b.capture.StartLogcat(sessionID, serial); err != nil {
+				log.Warn().Err(err).Str("session", sessionID).Msg("broker: logcat capture start failed")
+			}
+		}
+		if req.Capabilities.CaptureNetwork {
+			log.Warn().Str("session", sessionID).Msg("broker: capture_network requested but not yet implemented (planned v0.2)")
+		}
+	} else if req.Capabilities != nil && b.capture == nil {
+		log.Warn().Str("session", sessionID).Msg("broker: capabilities requested but no capture service wired")
+	}
 
 	log.Info().
 		Str("session", sessionID).

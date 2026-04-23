@@ -10,6 +10,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/drizz-dev/drizz-farm/internal/android"
+	"github.com/drizz-dev/drizz-farm/internal/capture"
 	"github.com/drizz-dev/drizz-farm/internal/config"
 	"github.com/drizz-dev/drizz-farm/internal/registry"
 	"github.com/drizz-dev/drizz-farm/internal/store"
@@ -25,6 +26,7 @@ type ServerDeps struct {
 	Runner    android.CommandRunner
 	Store     *store.Store
 	Registry  *registry.Registry
+	Capture   *capture.Service
 }
 
 // Server is the HTTP API server.

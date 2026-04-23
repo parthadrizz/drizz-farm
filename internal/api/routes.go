@@ -14,6 +14,7 @@ import (
 func RegisterRoutes(r chi.Router, cfg *config.Config, p *pool.Pool, b *session.Broker, lic *license.Validator, deps ServerDeps) {
 	sessH := &sessionHandlers{broker: b}
 	poolH := &poolHandlers{pool: p, store: deps.Store}
+	artH := &artifactHandlers{capture: deps.Capture, broker: b}
 	nodeH := &nodeHandlers{
 		cfg:       cfg,
 		pool:      p,
@@ -32,7 +33,7 @@ func RegisterRoutes(r chi.Router, cfg *config.Config, p *pool.Pool, b *session.B
 		pool: p,
 		adb:  android.NewADBClient(deps.SDK, deps.Runner),
 	}
-	recH := newRecordingHandlers(p, android.NewADBClient(deps.SDK, deps.Runner), deps.SDK, cfg.DataDir())
+	recH := newRecordingHandlers(p, android.NewADBClient(deps.SDK, deps.Runner), deps.SDK, cfg.DataDir(), b)
 	cfgH := &configHandlers{cfg: cfg}
 	histH := &historyHandlers{store: deps.Store}
 	snapH := &snapshotHandlers{
@@ -130,13 +131,18 @@ func RegisterRoutes(r chi.Router, cfg *config.Config, p *pool.Pool, b *session.B
 		r.Post("/sessions/{id}/key", devH.PressKey)
 		r.Post("/sessions/{id}/adb", devH.ExecADB)
 
-		// Recording + Artifacts
+		// Recording + Artifacts (legacy — kept for backwards compat).
 		r.Post("/sessions/{id}/recording/start", recH.Start)
 		r.Post("/sessions/{id}/recording/stop", recH.Stop)
 		r.Get("/sessions/{id}/recording/download", recH.Download)
 		r.Get("/sessions/{id}/recordings", recH.List)
 		r.Post("/sessions/{id}/screenshot", recH.Screenshot)
 		r.Get("/sessions/{id}/logcat/download", recH.GetLogcat)
+
+		// Unified per-session artifacts index + download. The one
+		// new clients and the dashboard should use.
+		r.Get("/sessions/{id}/artifacts", artH.List)
+		r.Get("/sessions/{id}/artifacts/{filename}", artH.Serve)
 		r.Post("/sessions/{id}/har/start", recH.StartHAR)
 		r.Post("/sessions/{id}/har/stop", recH.StopHAR)
 		r.Get("/sessions/{id}/har/download", recH.DownloadHAR)

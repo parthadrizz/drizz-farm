@@ -19,6 +19,7 @@ import (
 	"github.com/drizz-dev/drizz-farm/internal/android"
 	"github.com/drizz-dev/drizz-farm/internal/api"
 	"github.com/drizz-dev/drizz-farm/internal/buildinfo"
+	"github.com/drizz-dev/drizz-farm/internal/capture"
 	"github.com/drizz-dev/drizz-farm/internal/config"
 	"github.com/drizz-dev/drizz-farm/internal/daemon"
 	"github.com/drizz-dev/drizz-farm/internal/health"
@@ -180,6 +181,15 @@ func runStart(cmd *cobra.Command, args []string) error {
 
 	// Session broker — local-only, no federation
 	broker := session.NewBroker(cfg, emulatorPool, dataStore)
+
+	// Wire the declarative capture service so sessions that declare
+	// `capabilities: { record_video: true, capture_logcat: true }`
+	// automatically start + stop their captures at the session
+	// lifecycle boundaries. Shared between broker (auto-start/stop)
+	// and the API (unified artifacts list + serve).
+	captureSvc := capture.NewService(sdk.ADBPath(), cfg.DataDir())
+	broker.SetCaptureService(captureSvc)
+
 	broker.Start(ctx)
 
 	// Health checker
@@ -237,6 +247,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 		Runner:    runner,
 		Store:     dataStore,
 		Registry:  nodeReg,
+		Capture:   captureSvc,
 	})
 
 	errCh := make(chan error, 1)

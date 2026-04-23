@@ -15,6 +15,7 @@ import (
 
 	"github.com/drizz-dev/drizz-farm/internal/android"
 	"github.com/drizz-dev/drizz-farm/internal/pool"
+	"github.com/drizz-dev/drizz-farm/internal/session"
 )
 
 type recordingHandlers struct {
@@ -24,6 +25,7 @@ type recordingHandlers struct {
 	dataDir    string
 	mu         sync.Mutex
 	recordings map[string]*activeRecording
+	broker     *session.Broker // optional — used to gate endpoints on session capabilities
 }
 
 type activeRecording struct {
@@ -36,13 +38,14 @@ type activeRecording struct {
 }
 
 // newRecordingHandlers creates handlers for video recording, screenshots, logcat, and HAR capture.
-func newRecordingHandlers(p *pool.Pool, adb *android.ADBClient, sdk *android.SDK, dataDir string) *recordingHandlers {
+func newRecordingHandlers(p *pool.Pool, adb *android.ADBClient, sdk *android.SDK, dataDir string, b *session.Broker) *recordingHandlers {
 	return &recordingHandlers{
 		pool:       p,
 		adb:        adb,
 		sdk:        sdk,
 		dataDir:    dataDir,
 		recordings: make(map[string]*activeRecording),
+		broker:     b,
 	}
 }
 
@@ -198,7 +201,26 @@ func (h *recordingHandlers) List(w http.ResponseWriter, r *http.Request) {
 
 // Screenshot handles POST /api/v1/sessions/:id/screenshot
 func (h *recordingHandlers) Screenshot(w http.ResponseWriter, r *http.Request) {
-	serial, instID := h.findSerial(chi.URLParam(r, "id"))
+	sessionID := chi.URLParam(r, "id")
+
+	// Gate on session capability — if the caller created the session
+	// without CaptureScreenshots=true, refuse. Keeps the capability
+	// declaration meaningful: CI pipelines that don't want extra disk
+	// pressure can opt out and trust the guarantee.
+	if h.broker != nil {
+		if sess, err := h.broker.Get(sessionID); err == nil {
+			if sess.Capabilities != nil && !sess.Capabilities.CaptureScreenshots {
+				JSON(w, http.StatusForbidden, ErrorResponse{
+					Error:   "capability_disabled",
+					Message: "session was created with capture_screenshots=false",
+					Code:    403,
+				})
+				return
+			}
+		}
+	}
+
+	serial, _ := h.findSerial(sessionID)
 	if serial == "" {
 		JSON(w, 404, ErrorResponse{Error: "not_found", Message: "instance not found", Code: 404})
 		return
@@ -210,8 +232,10 @@ func (h *recordingHandlers) Screenshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Save to artifacts
-	dir := filepath.Join(h.dataDir, "artifacts", instID)
+	// Save under the SESSION's artifacts dir so the unified
+	// /sessions/{id}/artifacts endpoint surfaces it alongside the
+	// auto-captured video and logcat files.
+	dir := filepath.Join(h.dataDir, "artifacts", sessionID)
 	os.MkdirAll(dir, 0755)
 	filename := fmt.Sprintf("screenshot_%s.png", time.Now().Format("20060102_150405"))
 	localPath := filepath.Join(dir, filename)

@@ -104,6 +104,12 @@ func (s *Store) migrate() error {
 	// Migration: add node_name column if missing
 	s.db.Exec(`ALTER TABLE sessions ADD COLUMN node_name TEXT NOT NULL DEFAULT ''`)
 
+	// Migration: capabilities JSON blob per session (record_video,
+	// capture_logcat, etc.). Errors intentionally ignored — ALTER
+	// fails with "duplicate column" when the migration's already been
+	// applied, which is the happy path.
+	s.db.Exec(`ALTER TABLE sessions ADD COLUMN capabilities TEXT NOT NULL DEFAULT ''`)
+
 	return nil
 }
 

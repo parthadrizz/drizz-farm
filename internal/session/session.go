@@ -68,6 +68,12 @@ type Session struct {
 	CreatedAt   time.Time    `json:"created_at"`
 	ExpiresAt   time.Time    `json:"expires_at"`
 	ReleasedAt  *time.Time   `json:"released_at,omitempty"`
+
+	// Capture configuration — what the session wants recorded. Set at
+	// create time via CreateSessionRequest.Capabilities. The broker
+	// auto-starts the corresponding capture subsystems on activation
+	// and tears them down on release.
+	Capabilities *SessionCapabilities `json:"capabilities,omitempty"`
 }
 
 // ConnectionInfo holds the connection details for a session.
@@ -110,4 +116,21 @@ type CreateSessionRequest struct {
 	// profile).
 	DeviceID string `json:"device_id,omitempty"`
 	AVDName  string `json:"avd_name,omitempty"`
+
+	// Declarative capture settings. The broker auto-starts the
+	// corresponding subsystems on session activation and tears them
+	// down on release. Screenshot capture is on-demand via the
+	// per-session endpoint but gated on CaptureScreenshots=true.
+	Capabilities *SessionCapabilities `json:"capabilities,omitempty"`
+}
+
+// SessionCapabilities describes what the session wants captured. Zero
+// values mean "don't capture." RetentionHours is best-effort and read
+// by a future cleanup job; 0 means "use daemon default."
+type SessionCapabilities struct {
+	RecordVideo        bool `json:"record_video,omitempty"`
+	CaptureLogcat      bool `json:"capture_logcat,omitempty"`
+	CaptureScreenshots bool `json:"capture_screenshots,omitempty"`
+	CaptureNetwork     bool `json:"capture_network,omitempty"` // reserved for mitmproxy integration
+	RetentionHours     int  `json:"retention_hours,omitempty"`
 }
