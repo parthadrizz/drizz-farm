@@ -165,7 +165,13 @@ func (h *deviceHandlers) SetLocale(w http.ResponseWriter, r *http.Request) {
 	JSON(w, 200, map[string]any{"status": "set", "locale": req.Locale})
 }
 
-// SetDarkMode handles POST /api/v1/sessions/:id/appearance
+// SetDarkMode handles POST /api/v1/sessions/:id/appearance.
+//
+// Accepts `dark` (preferred) or `dark_mode` (legacy alias from BS/LT
+// parity docs). Uses `cmd uimode night yes|no` which works on API
+// 29+; on older images it silently no-ops so we also write the
+// secure setting ui_night_mode directly as a belt-and-braces fallback.
+// Values: 1=light, 2=dark, 0=auto (we only expose light/dark here).
 func (h *deviceHandlers) SetDarkMode(w http.ResponseWriter, r *http.Request) {
 	serial := h.findSerial(chi.URLParam(r, "id"))
 	if serial == "" {
@@ -173,17 +179,30 @@ func (h *deviceHandlers) SetDarkMode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Dark bool `json:"dark"`
+		Dark     *bool `json:"dark,omitempty"`
+		DarkMode *bool `json:"dark_mode,omitempty"`
 	}
 	json.NewDecoder(r.Body).Decode(&req)
 
-	if req.Dark {
-		h.adb.Shell(r.Context(), serial, "cmd uimode night yes")
-	} else {
-		h.adb.Shell(r.Context(), serial, "cmd uimode night no")
+	var dark bool
+	switch {
+	case req.Dark != nil:
+		dark = *req.Dark
+	case req.DarkMode != nil:
+		dark = *req.DarkMode
 	}
 
-	JSON(w, 200, map[string]any{"status": "set", "dark": req.Dark})
+	mode, uiVal := "no", "1"
+	if dark {
+		mode, uiVal = "yes", "2"
+	}
+	// Primary path — works on modern emulators.
+	h.adb.Shell(r.Context(), serial, "cmd uimode night "+mode)
+	// Belt-and-braces — directly poke the secure setting so older
+	// images that don't implement the cmd uimode path still flip.
+	h.adb.Shell(r.Context(), serial, "settings put secure ui_night_mode "+uiVal)
+
+	JSON(w, 200, map[string]any{"status": "set", "dark": dark})
 }
 
 // InstallAPK handles POST /api/v1/sessions/:id/install.
@@ -328,9 +347,22 @@ func (h *deviceHandlers) Biometric(w http.ResponseWriter, r *http.Request) {
 
 	switch req.Action {
 	case "enroll":
-		// `cmd fingerprint enroll` prompts the emulator; we kick the
-		// enrollment via `settings put` to avoid its interactive UI.
+		// Enrollment on an emulator needs three things in order:
+		//   1. A device credential (PIN/password) — fingerprint won't
+		//      enroll without a backup auth method set.
+		//   2. `cmd fingerprint enroll` to register the sensor slot.
+		//   3. `emu finger touch 1` during the prompt so the enrollment
+		//      completes; we fire a few in quick succession to cover
+		//      the multi-touch confirmation Android asks for.
+		_, _ = h.adb.Shell(r.Context(), serial, "locksettings set-pin 1111")
 		_, _ = h.adb.Shell(r.Context(), serial, "cmd fingerprint enroll")
+		// Give the enrollment UI a beat to settle, then fire enough
+		// synthetic touches to satisfy the "touch N times" loop.
+		time.Sleep(500 * time.Millisecond)
+		for i := 0; i < 6; i++ {
+			h.adb.EmuCommand(r.Context(), serial, "finger touch 1")
+			time.Sleep(200 * time.Millisecond)
+		}
 	case "fail":
 		h.adb.EmuCommand(r.Context(), serial, "finger touch 0")
 	default: // "touch" or empty → success
@@ -631,12 +663,21 @@ func (h *deviceHandlers) Clipboard(w http.ResponseWriter, r *http.Request) {
 	json.NewDecoder(r.Body).Decode(&req)
 
 	safe := strings.ReplaceAll(req.Text, "'", `'\''`)
-	// `cmd clipboard set-primary-clip -u 0` → user 0, primary clip.
-	// Emulator >= API 29 supports this; older images error out.
+	// Resolve the active user id — Android multi-user emulators can
+	// run the foreground app as user 10 or 11 instead of 0, and
+	// `cmd clipboard set-primary-clip -u 0` writes to a user that
+	// no app is reading from. `am get-current-user` returns the UID
+	// for the currently focused user.
+	uid := "0"
+	if out, err := h.adb.Shell(r.Context(), serial, "am get-current-user"); err == nil {
+		if trimmed := strings.TrimSpace(out); trimmed != "" {
+			uid = trimmed
+		}
+	}
 	out, err := h.adb.Shell(r.Context(), serial,
-		fmt.Sprintf(`cmd clipboard set-primary-clip -u 0 --value '%s'`, safe))
+		fmt.Sprintf(`cmd clipboard set-primary-clip -u %s --value '%s'`, uid, safe))
 	if err == nil && !strings.Contains(out, "Unknown command") && !strings.Contains(out, "not found") {
-		JSON(w, 200, map[string]any{"status": "set", "method": "cmd_clipboard"})
+		JSON(w, 200, map[string]any{"status": "set", "method": "cmd_clipboard", "user": uid})
 		return
 	}
 
