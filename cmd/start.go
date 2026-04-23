@@ -190,6 +190,11 @@ func runStart(cmd *cobra.Command, args []string) error {
 	captureSvc := capture.NewService(sdk.ADBPath(), cfg.DataDir())
 	broker.SetCaptureService(captureSvc)
 
+	// Periodic retention sweep — deletes artifact dirs older than
+	// the configured window (default 7 days). Per-session
+	// Capabilities.RetentionHours overrides via a sidecar file.
+	captureSvc.StartRetentionSweeper(ctx, cfg.Pool.ArtifactRetentionHours)
+
 	broker.Start(ctx)
 
 	// Health checker

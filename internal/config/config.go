@@ -56,16 +56,21 @@ type NodeConfig struct {
 }
 
 type PoolConfig struct {
-	VisibleEmulators      bool            `yaml:"visible_emulators"        mapstructure:"visible_emulators"`
-	MaxConcurrent         int             `yaml:"max_concurrent"           mapstructure:"max_concurrent"`
-	SessionTimeoutMinutes int             `yaml:"session_timeout_minutes"  mapstructure:"session_timeout_minutes"`
-	SessionMaxMinutes     int             `yaml:"session_max_duration_minutes" mapstructure:"session_max_duration_minutes"`
-	QueueMaxSize          int             `yaml:"queue_max_size"           mapstructure:"queue_max_size"`
-	QueueTimeoutSeconds   int             `yaml:"queue_timeout_seconds"    mapstructure:"queue_timeout_seconds"`
-	PortRangeMin          int             `yaml:"port_range_min"           mapstructure:"port_range_min"`
-	PortRangeMax          int             `yaml:"port_range_max"           mapstructure:"port_range_max"`
-	Warmup                []WarmupConfig  `yaml:"warmup"                   mapstructure:"warmup"`
-	Profiles              ProfilesConfig  `yaml:"profiles"                 mapstructure:"profiles"`
+	VisibleEmulators       bool            `yaml:"visible_emulators"         mapstructure:"visible_emulators"`
+	MaxConcurrent          int             `yaml:"max_concurrent"            mapstructure:"max_concurrent"`
+	SessionTimeoutMinutes  int             `yaml:"session_timeout_minutes"   mapstructure:"session_timeout_minutes"`
+	SessionMaxMinutes      int             `yaml:"session_max_duration_minutes" mapstructure:"session_max_duration_minutes"`
+	QueueMaxSize           int             `yaml:"queue_max_size"            mapstructure:"queue_max_size"`
+	QueueTimeoutSeconds    int             `yaml:"queue_timeout_seconds"     mapstructure:"queue_timeout_seconds"`
+	PortRangeMin           int             `yaml:"port_range_min"            mapstructure:"port_range_min"`
+	PortRangeMax           int             `yaml:"port_range_max"            mapstructure:"port_range_max"`
+	// ArtifactRetentionHours controls the default lifetime for per-
+	// session artifact directories (video, logcat, network HAR, …).
+	// 0 = use the built-in 7-day default. Negative = retain forever.
+	// A session can override via Capabilities.RetentionHours.
+	ArtifactRetentionHours int             `yaml:"artifact_retention_hours"  mapstructure:"artifact_retention_hours"`
+	Warmup                 []WarmupConfig  `yaml:"warmup"                    mapstructure:"warmup"`
+	Profiles               ProfilesConfig  `yaml:"profiles"                  mapstructure:"profiles"`
 }
 
 type WarmupConfig struct {

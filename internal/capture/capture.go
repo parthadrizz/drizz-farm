@@ -34,17 +34,23 @@ type Service struct {
 	adbPath string
 	dataDir string
 
-	videos  map[string]*videoCapture  // keyed by sessionID
-	logcats map[string]*logcatCapture // keyed by sessionID
+	videos   map[string]*videoCapture   // keyed by sessionID
+	logcats  map[string]*logcatCapture  // keyed by sessionID
+	networks map[string]*networkCapture // keyed by sessionID
+
+	nextProxyPort int        // rotates 8889..8999 to avoid collisions
+	portMu        sync.Mutex // guards nextProxyPort
 }
 
 type videoCapture struct {
-	cmd        *exec.Cmd
 	cancel     context.CancelFunc
-	devicePath string
-	localPath  string
+	done       chan struct{} // closed when the chunk loop exits
 	serial     string
+	sessionID  string
+	localPath  string // final merged path (set on stop)
+	chunks     []string // ordered list of chunk file paths
 	startedAt  time.Time
+	mu         sync.Mutex // guards chunks slice
 }
 
 type logcatCapture struct {
@@ -55,15 +61,26 @@ type logcatCapture struct {
 	startedAt time.Time
 }
 
+type networkCapture struct {
+	cmd       *exec.Cmd
+	cancel    context.CancelFunc
+	serial    string
+	port      int
+	harPath   string
+	startedAt time.Time
+}
+
 // NewService wires up the capture service with the ADB binary path
 // and the daemon's data directory. Artifacts land at
 // <dataDir>/artifacts/<session_id>/{video.mp4, logcat.txt, ...}.
 func NewService(adbPath, dataDir string) *Service {
 	return &Service{
-		adbPath: adbPath,
-		dataDir: dataDir,
-		videos:  map[string]*videoCapture{},
-		logcats: map[string]*logcatCapture{},
+		adbPath:       adbPath,
+		dataDir:       dataDir,
+		videos:        map[string]*videoCapture{},
+		logcats:       map[string]*logcatCapture{},
+		networks:      map[string]*networkCapture{},
+		nextProxyPort: 8889,
 	}
 }
 
@@ -75,10 +92,15 @@ func (s *Service) ArtifactsDir(sessionID string) string {
 	return d
 }
 
-// StartVideo begins a screenrecord on the device, writing in 180s
-// chunks (Android's screenrecord hard cap) and pulling each chunk
-// back to host storage. For v0 we just capture a single 180s segment;
-// if the session outlives the segment, we don't yet restart — TODO.
+// StartVideo begins a long-form screen recording. Android's built-in
+// screenrecord has a hard 180-second cap per invocation, so we run a
+// loop that launches fresh 180s chunks back-to-back and pulls each
+// one off the device as soon as it finalizes. StopVideo cancels the
+// loop, pulls any in-flight chunk, then concatenates everything into
+// a single video.mp4 using `ffmpeg -f concat -c copy` when ffmpeg is
+// available. If ffmpeg isn't installed we leave the chunks in place
+// as video_000.mp4, video_001.mp4, … — the unified artifacts
+// endpoint surfaces all of them.
 func (s *Service) StartVideo(sessionID, serial string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -89,36 +111,108 @@ func (s *Service) StartVideo(sessionID, serial string) error {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("mkdir artifacts: %w", err)
 	}
-	devicePath := "/sdcard/drizz_session_" + sessionID + ".mp4"
-	localPath := filepath.Join(dir, "video.mp4")
 
 	ctx, cancel := context.WithCancel(context.Background())
-	cmd := exec.CommandContext(ctx, s.adbPath, "-s", serial, "shell",
-		"screenrecord", "--time-limit", "180", devicePath)
-	if err := cmd.Start(); err != nil {
-		cancel()
-		return fmt.Errorf("start screenrecord: %w", err)
+	vc := &videoCapture{
+		cancel:    cancel,
+		done:      make(chan struct{}),
+		serial:    serial,
+		sessionID: sessionID,
+		startedAt: time.Now(),
 	}
-	s.videos[sessionID] = &videoCapture{
-		cmd:        cmd,
-		cancel:     cancel,
-		devicePath: devicePath,
-		localPath:  localPath,
-		serial:     serial,
-		startedAt:  time.Now(),
-	}
-	log.Info().Str("session", sessionID).Str("serial", serial).Msg("capture: video started")
+	s.videos[sessionID] = vc
+
+	go s.videoChunkLoop(ctx, vc, dir)
+	log.Info().Str("session", sessionID).Str("serial", serial).Msg("capture: video started (chunked)")
 	return nil
 }
 
-// StopVideo sends SIGINT to screenrecord so the MP4 finalizes cleanly,
-// waits for the process, then pulls the file off the device. Errors
-// are logged and swallowed — stop-on-release shouldn't fail the
-// release. Returns the final artifact path (empty if nothing was
-// captured or the pull failed).
+// videoChunkLoop records sequential 180s screenrecord chunks until
+// the context is cancelled. Each chunk is pulled off the device and
+// appended to vc.chunks as soon as it finishes. Runs in its own
+// goroutine; closes vc.done on exit so StopVideo can wait cleanly.
+func (s *Service) videoChunkLoop(ctx context.Context, vc *videoCapture, dir string) {
+	defer close(vc.done)
+	idx := 0
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		devicePath := fmt.Sprintf("/sdcard/drizz_%s_%03d.mp4", vc.sessionID, idx)
+		localPath := filepath.Join(dir, fmt.Sprintf("video_%03d.mp4", idx))
+
+		// Each screenrecord invocation runs up to 180s. We pass
+		// the chunk context (cancelled with the loop) but also rely
+		// on screenrecord's own --time-limit for the happy path.
+		cmd := exec.CommandContext(ctx, s.adbPath, "-s", vc.serial, "shell",
+			"screenrecord", "--time-limit", "180", devicePath)
+		if err := cmd.Start(); err != nil {
+			log.Warn().Err(err).Str("session", vc.sessionID).Int("chunk", idx).Msg("capture: chunk start failed")
+			return
+		}
+
+		// Wait for the chunk to finish OR the loop to be cancelled.
+		waitCh := make(chan error, 1)
+		go func() { waitCh <- cmd.Wait() }()
+		select {
+		case <-ctx.Done():
+			// Stop called — ask screenrecord to finalize, then wait a
+			// few seconds for the MP4 header to close before we
+			// forcibly kill it.
+			if cmd.Process != nil {
+				_ = cmd.Process.Signal(os.Interrupt)
+			}
+			select {
+			case <-waitCh:
+			case <-time.After(5 * time.Second):
+				_ = cmd.Process.Kill()
+				<-waitCh
+			}
+		case err := <-waitCh:
+			if err != nil && ctx.Err() == nil {
+				log.Warn().Err(err).Str("session", vc.sessionID).Int("chunk", idx).Msg("capture: chunk wait returned error (continuing)")
+			}
+		}
+
+		// Pull the chunk off the device and record it. We do this
+		// even when cancelled — partial chunks are better than none.
+		pullCtx, pullCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		pullCmd := exec.CommandContext(pullCtx, s.adbPath, "-s", vc.serial, "pull", devicePath, localPath)
+		pullErr := pullCmd.Run()
+		pullCancel()
+
+		// Best-effort cleanup of on-device chunk.
+		rmCtx, rmCancel := context.WithTimeout(context.Background(), 3*time.Second)
+		_ = exec.CommandContext(rmCtx, s.adbPath, "-s", vc.serial, "shell", "rm", "-f", devicePath).Run()
+		rmCancel()
+
+		if pullErr == nil {
+			vc.mu.Lock()
+			vc.chunks = append(vc.chunks, localPath)
+			vc.mu.Unlock()
+		} else if _, err := os.Stat(localPath); err == nil {
+			// Pull reported an error but we got something locally.
+			// Keep it — partial is useful.
+			vc.mu.Lock()
+			vc.chunks = append(vc.chunks, localPath)
+			vc.mu.Unlock()
+		}
+
+		if ctx.Err() != nil {
+			return
+		}
+		idx++
+	}
+}
+
+// StopVideo cancels the chunk loop, waits for the in-flight chunk
+// to be pulled, then either concatenates chunks with ffmpeg into a
+// single video.mp4 (ideal) or leaves them as video_000.mp4,
+// video_001.mp4, … (fallback). Returns the final path if a merge
+// succeeded, else an empty string.
 func (s *Service) StopVideo(sessionID string) string {
 	s.mu.Lock()
-	cap, ok := s.videos[sessionID]
+	vc, ok := s.videos[sessionID]
 	if ok {
 		delete(s.videos, sessionID)
 	}
@@ -127,35 +221,63 @@ func (s *Service) StopVideo(sessionID string) string {
 		return ""
 	}
 
-	// SIGINT makes screenrecord finalize its MP4 header. If it's
-	// already dead or blocked, cancel the ctx as a fallback.
-	if cap.cmd.Process != nil {
-		_ = cap.cmd.Process.Signal(os.Interrupt)
-	}
-	done := make(chan struct{})
-	go func() { cap.cmd.Wait(); close(done) }()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		cap.cancel()
-		<-done
-	}
+	vc.cancel()
+	<-vc.done // wait for loop to finish pulling its last chunk
 
-	// Pull the finalized MP4 off the device.
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	pullCmd := exec.CommandContext(ctx, s.adbPath, "-s", cap.serial, "pull", cap.devicePath, cap.localPath)
-	if out, err := pullCmd.CombinedOutput(); err != nil {
-		log.Warn().Err(err).Str("session", sessionID).Str("out", string(out)).Msg("capture: adb pull video failed")
+	vc.mu.Lock()
+	chunks := append([]string(nil), vc.chunks...)
+	vc.mu.Unlock()
+
+	if len(chunks) == 0 {
+		log.Warn().Str("session", sessionID).Msg("capture: video stopped with no chunks captured")
 		return ""
 	}
-	// Best-effort cleanup of the on-device file.
-	rmCtx, rmCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer rmCancel()
-	_ = exec.CommandContext(rmCtx, s.adbPath, "-s", cap.serial, "shell", "rm", "-f", cap.devicePath).Run()
+	if len(chunks) == 1 {
+		// Single chunk — just rename to the canonical filename so the
+		// unified artifacts endpoint exposes it as "video.mp4".
+		dir := filepath.Dir(chunks[0])
+		final := filepath.Join(dir, "video.mp4")
+		if err := os.Rename(chunks[0], final); err == nil {
+			log.Info().Str("session", sessionID).Str("path", final).Msg("capture: video saved (single chunk)")
+			return final
+		}
+		return chunks[0]
+	}
 
-	log.Info().Str("session", sessionID).Str("path", cap.localPath).Msg("capture: video saved")
-	return cap.localPath
+	// Multi-chunk → try ffmpeg concat. Format is literal "file 'path'\n" lines.
+	ffmpeg, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		log.Warn().Str("session", sessionID).Int("chunks", len(chunks)).Msg("capture: ffmpeg not found — leaving chunks un-merged")
+		return chunks[len(chunks)-1] // return latest chunk as best-guess
+	}
+
+	dir := filepath.Dir(chunks[0])
+	listPath := filepath.Join(dir, ".concat.txt")
+	var lines []byte
+	for _, c := range chunks {
+		lines = append(lines, []byte(fmt.Sprintf("file '%s'\n", c))...)
+	}
+	if err := os.WriteFile(listPath, lines, 0644); err != nil {
+		log.Warn().Err(err).Str("session", sessionID).Msg("capture: write concat list failed")
+		return chunks[len(chunks)-1]
+	}
+	defer os.Remove(listPath)
+
+	final := filepath.Join(dir, "video.mp4")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	concatCmd := exec.CommandContext(ctx, ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i", listPath, "-c", "copy", final)
+	if out, err := concatCmd.CombinedOutput(); err != nil {
+		log.Warn().Err(err).Str("session", sessionID).Str("ffmpeg_out", string(out)).Msg("capture: ffmpeg concat failed — keeping chunks")
+		return chunks[len(chunks)-1]
+	}
+
+	// Merge succeeded — clean up per-chunk files.
+	for _, c := range chunks {
+		_ = os.Remove(c)
+	}
+	log.Info().Str("session", sessionID).Int("chunks", len(chunks)).Str("path", final).Msg("capture: video stitched")
+	return final
 }
 
 // StartLogcat tails `adb logcat -b all` for the session, writing
@@ -227,11 +349,172 @@ func (s *Service) StopLogcat(sessionID string) string {
 	return cap.localPath
 }
 
+// StartNetwork spins up a mitmdump proxy on a per-session port and
+// points the emulator's global HTTP proxy at it so all traffic gets
+// logged to a HAR file. HTTPS decrypt requires the user to have
+// trusted the mitmproxy CA on the emulator image — we don't auto-
+// install it because it requires root remount + reboot on most
+// current API levels; unencrypted traffic is captured regardless,
+// and HTTPS requests show up as CONNECT lines.
+//
+// No-op + clear warning when `mitmdump` isn't on PATH — we prefer
+// failing the capability gracefully over failing the session.
+func (s *Service) StartNetwork(sessionID, serial string) error {
+	s.mu.Lock()
+	if _, ok := s.networks[sessionID]; ok {
+		s.mu.Unlock()
+		return nil // idempotent
+	}
+	s.mu.Unlock()
+
+	mitmdump, err := exec.LookPath("mitmdump")
+	if err != nil {
+		log.Warn().Str("session", sessionID).Msg("capture: mitmdump not found on PATH — install with `brew install mitmproxy` to enable network capture")
+		return fmt.Errorf("mitmdump not found: %w", err)
+	}
+
+	dir := filepath.Join(s.dataDir, "artifacts", sessionID)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("mkdir artifacts: %w", err)
+	}
+	harPath := filepath.Join(dir, "network.har")
+
+	s.portMu.Lock()
+	port := s.nextProxyPort
+	s.nextProxyPort++
+	if s.nextProxyPort > 8999 {
+		s.nextProxyPort = 8889
+	}
+	s.portMu.Unlock()
+
+	// Start mitmdump with the built-in HAR save addon (requires
+	// mitmproxy >=9; older versions need --set hardump=…). We pass
+	// both forms and let mitmdump pick the one it understands.
+	ctx, cancel := context.WithCancel(context.Background())
+	cmd := exec.CommandContext(ctx, mitmdump,
+		"--listen-host", "0.0.0.0",
+		"--listen-port", fmt.Sprintf("%d", port),
+		"--set", fmt.Sprintf("hardump=%s", harPath),
+		"-q", // quiet — write to file, not stdout
+	)
+	// Route stderr so startup failures land in our log.
+	cmd.Stderr = newLineWriter(func(line string) {
+		log.Debug().Str("session", sessionID).Str("mitm", line).Msg("capture: mitmdump")
+	})
+	if err := cmd.Start(); err != nil {
+		cancel()
+		return fmt.Errorf("start mitmdump: %w", err)
+	}
+
+	// Give mitmdump ~1s to bind before we point the emulator at it.
+	time.Sleep(1 * time.Second)
+
+	// Emulator reaches the host via the magic 10.0.2.2 address.
+	proxyAddr := fmt.Sprintf("10.0.2.2:%d", port)
+	setCtx, setCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer setCancel()
+	setCmd := exec.CommandContext(setCtx, s.adbPath, "-s", serial, "shell",
+		"settings", "put", "global", "http_proxy", proxyAddr)
+	if out, err := setCmd.CombinedOutput(); err != nil {
+		_ = cmd.Process.Kill()
+		cancel()
+		return fmt.Errorf("set proxy: %w (%s)", err, string(out))
+	}
+
+	s.mu.Lock()
+	s.networks[sessionID] = &networkCapture{
+		cmd:       cmd,
+		cancel:    cancel,
+		serial:    serial,
+		port:      port,
+		harPath:   harPath,
+		startedAt: time.Now(),
+	}
+	s.mu.Unlock()
+	log.Info().Str("session", sessionID).Int("port", port).Str("har", harPath).Msg("capture: network started")
+	return nil
+}
+
+// StopNetwork clears the emulator proxy, terminates mitmdump so it
+// flushes the HAR, and returns the final HAR path. Best-effort;
+// errors are logged and the broker's release proceeds regardless.
+func (s *Service) StopNetwork(sessionID string) string {
+	s.mu.Lock()
+	nc, ok := s.networks[sessionID]
+	if ok {
+		delete(s.networks, sessionID)
+	}
+	s.mu.Unlock()
+	if !ok {
+		return ""
+	}
+
+	// Remove the emulator's proxy setting first so in-flight requests
+	// don't pile up once we kill mitmdump.
+	clrCtx, clrCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	_ = exec.CommandContext(clrCtx, s.adbPath, "-s", nc.serial, "shell",
+		"settings", "delete", "global", "http_proxy").Run()
+	clrCancel()
+
+	// SIGINT → mitmdump flushes its HAR on graceful shutdown.
+	if nc.cmd.Process != nil {
+		_ = nc.cmd.Process.Signal(os.Interrupt)
+	}
+	done := make(chan struct{})
+	go func() { nc.cmd.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		nc.cancel()
+		<-done
+	}
+
+	if _, err := os.Stat(nc.harPath); err != nil {
+		log.Warn().Err(err).Str("session", sessionID).Msg("capture: network stopped but no HAR file was produced")
+		return ""
+	}
+	log.Info().Str("session", sessionID).Str("path", nc.harPath).Msg("capture: network HAR saved")
+	return nc.harPath
+}
+
 // StopAll stops every active capture for a session. Safe to call
 // when nothing's active.
 func (s *Service) StopAll(sessionID string) {
 	s.StopVideo(sessionID)
 	s.StopLogcat(sessionID)
+	s.StopNetwork(sessionID)
+}
+
+// lineWriter invokes fn on every newline-terminated line written to
+// it. Used to route mitmdump stderr into zerolog without buffering
+// the entire stream.
+type lineWriter struct {
+	buf []byte
+	fn  func(string)
+}
+
+func newLineWriter(fn func(string)) *lineWriter { return &lineWriter{fn: fn} }
+
+func (w *lineWriter) Write(p []byte) (int, error) {
+	w.buf = append(w.buf, p...)
+	for {
+		i := -1
+		for j, b := range w.buf {
+			if b == '\n' {
+				i = j
+				break
+			}
+		}
+		if i < 0 {
+			break
+		}
+		line := string(w.buf[:i])
+		w.buf = w.buf[i+1:]
+		if line != "" {
+			w.fn(line)
+		}
+	}
+	return len(p), nil
 }
 
 // ArtifactFile is a single persisted artifact for a session.

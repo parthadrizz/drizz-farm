@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { Activity } from 'lucide-react';
+import { Activity, Plus } from 'lucide-react';
 import { api, Session } from '../lib/api';
 import { StatusBadge, StatusDot } from '../components/StatusBadge';
 import { EmptyState } from '../components/EmptyState';
+import { NewSessionModal } from '../components/NewSessionModal';
 
 type Filter = 'all' | 'active' | 'queued' | 'released' | 'timed_out';
 
@@ -13,6 +14,7 @@ export function Sessions() {
   const [queued, setQueued] = useState(0);
   const [filter, setFilter] = useState<Filter>('all');
   const [error, setError] = useState('');
+  const [newOpen, setNewOpen] = useState(false);
 
   const refresh = async () => {
     try {
@@ -80,8 +82,20 @@ export function Sessions() {
           <span className="text-primary">{active} active</span>
           <span className="text-status-booting">{queued} queued</span>
           <span className="text-muted-foreground">{allSessions.length} total</span>
+          <button
+            onClick={() => setNewOpen(true)}
+            className="action-btn action-btn-primary inline-flex items-center gap-1.5 ml-2"
+          >
+            <Plus className="w-3.5 h-3.5" /> New session
+          </button>
         </div>
       </div>
+
+      <NewSessionModal
+        open={newOpen}
+        onClose={() => setNewOpen(false)}
+        onCreated={() => { setNewOpen(false); refresh(); }}
+      />
 
       <div className="flex gap-1 border-b border-border pb-2">
         {(['all', 'active', 'queued', 'released', 'timed_out'] as Filter[]).map(t => (
@@ -153,24 +167,90 @@ export function Sessions() {
                 </div>
               )}
 
-              {(s.state === 'released' || s.state === 'timed_out') && (
-                <div className="mt-2 ml-7 flex items-center gap-3">
-                  <button onClick={async () => {
-                    const res = await fetch(`/api/v1/sessions/${s.id}/recordings`).catch(() => null);
-                    if (res?.ok) {
-                      const data = await res.json();
-                      const recs = data.recordings || [];
-                      if (recs.length > 0) window.open(`/api/v1/sessions/${s.id}/recording/download?file=${recs[0]}`, '_blank');
-                      else alert('No recordings found');
-                    }
-                  }} className="text-xs text-accent hover:underline">Recording</button>
-                  <button onClick={() => window.open(`/api/v1/sessions/${s.id}/logcat/download`, '_blank')} className="text-xs text-accent hover:underline">Logcat</button>
-                </div>
-              )}
+              <ArtifactsPanel sessionID={s.id} />
             </div>
           ))}
         </div>
       )}
     </div>
   );
+}
+
+// ArtifactsPanel fetches the unified /sessions/{id}/artifacts list and
+// renders a single row of download chips per captured artifact. Lazy-
+// loaded so the session list doesn't make N calls on every render; we
+// only fetch when the component mounts. Refreshes once per minute so
+// long-running sessions show new chunks as they land.
+function ArtifactsPanel({ sessionID }: { sessionID: string }) {
+  const [data, setData] = useState<{ capabilities?: any; artifacts: ArtifactRow[] } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      fetch(`/api/v1/sessions/${sessionID}/artifacts`)
+        .then(r => r.ok ? r.json() : null)
+        .then(d => { if (!cancelled) setData(d); })
+        .catch(() => {});
+    };
+    load();
+    const i = setInterval(load, 60_000);
+    return () => { cancelled = true; clearInterval(i); };
+  }, [sessionID]);
+
+  if (!data) return null;
+  const arts = data.artifacts || [];
+  if (arts.length === 0) {
+    // Distinguish "nothing captured because nothing was asked for"
+    // from "requested but still empty."
+    const caps = data.capabilities;
+    const asked = caps && (caps.record_video || caps.capture_logcat || caps.capture_screenshots || caps.capture_network);
+    if (!asked) return null;
+    return (
+      <div className="mt-2 ml-7 text-[11px] text-muted-foreground">
+        Artifacts requested but not yet available.
+      </div>
+    );
+  }
+  return (
+    <div className="mt-2 ml-7 flex items-center gap-2 flex-wrap">
+      {arts.map(a => (
+        <a
+          key={a.filename}
+          href={a.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="action-btn surface-3 text-xs text-foreground hover:text-primary"
+          title={`${a.filename} · ${formatSize(a.size)}`}
+        >
+          {iconForType(a.type)}
+          <span className="ml-1.5">{a.type}</span>
+          <span className="ml-1 text-muted-foreground/70">· {formatSize(a.size)}</span>
+        </a>
+      ))}
+    </div>
+  );
+}
+
+interface ArtifactRow {
+  type: string;
+  filename: string;
+  size: number;
+  url: string;
+}
+
+function iconForType(t: string): string {
+  switch (t) {
+    case 'video': return '▶';
+    case 'logcat': return '▤';
+    case 'screenshot': return '◉';
+    case 'network': return '⇅';
+    default: return '•';
+  }
+}
+
+function formatSize(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }

@@ -81,12 +81,12 @@ func (h *poolHandlers) Devices(w http.ResponseWriter, r *http.Request) {
 			if free {
 				// "free" means actually allocatable by an automated caller:
 				// warm AND not reserved.
-				if string(inst.State) != "warm" || inst.Reserved {
+				if inst.State.String() != "warm" || inst.Reserved {
 					continue
 				}
 			}
 		}
-		if v := q.Get("state"); v != "" && string(inst.State) != v {
+		if v := q.Get("state"); v != "" && inst.State.String() != v {
 			continue
 		}
 		if v := q.Get("profile"); v != "" && inst.ProfileName != v {

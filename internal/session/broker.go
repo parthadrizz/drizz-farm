@@ -32,7 +32,9 @@ var (
 type CaptureService interface {
 	StartVideo(sessionID, serial string) error
 	StartLogcat(sessionID, serial string) error
+	StartNetwork(sessionID, serial string) error
 	StopAll(sessionID string)
+	SetRetentionOverride(sessionID string, hours int)
 }
 
 type Broker struct {
@@ -343,6 +345,9 @@ func (b *Broker) createSessionFromInstance(inst *pool.DeviceInstance, req Create
 	// failure is logged but doesn't fail session creation.
 	if req.Capabilities != nil && b.capture != nil && inst.Device != nil {
 		serial := inst.Device.Serial()
+		if req.Capabilities.RetentionHours != 0 {
+			b.capture.SetRetentionOverride(sessionID, req.Capabilities.RetentionHours)
+		}
 		if req.Capabilities.RecordVideo {
 			if err := b.capture.StartVideo(sessionID, serial); err != nil {
 				log.Warn().Err(err).Str("session", sessionID).Msg("broker: video capture start failed")
@@ -354,7 +359,9 @@ func (b *Broker) createSessionFromInstance(inst *pool.DeviceInstance, req Create
 			}
 		}
 		if req.Capabilities.CaptureNetwork {
-			log.Warn().Str("session", sessionID).Msg("broker: capture_network requested but not yet implemented (planned v0.2)")
+			if err := b.capture.StartNetwork(sessionID, serial); err != nil {
+				log.Warn().Err(err).Str("session", sessionID).Msg("broker: network capture start failed (is mitmproxy installed?)")
+			}
 		}
 	} else if req.Capabilities != nil && b.capture == nil {
 		log.Warn().Str("session", sessionID).Msg("broker: capabilities requested but no capture service wired")

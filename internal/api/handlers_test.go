@@ -142,7 +142,7 @@ func TestSnapshotHandler_RestoreMissingName(t *testing.T) {
 // --- Recording Handlers ---
 
 func TestRecordingHandler_StopNoRecording(t *testing.T) {
-	h := newRecordingHandlers(nil, nil, nil, "/tmp")
+	h := newRecordingHandlers(nil, nil, nil, "/tmp", nil)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", "/api/v1/sessions/abc/recording/stop", nil)
 	rctx := chi.NewRouteContext()
@@ -155,7 +155,7 @@ func TestRecordingHandler_StopNoRecording(t *testing.T) {
 }
 
 func TestRecordingHandler_ListNoArtifacts(t *testing.T) {
-	h := newRecordingHandlers(nil, nil, nil, "/tmp/nonexistent-drizz-test")
+	h := newRecordingHandlers(nil, nil, nil, "/tmp/nonexistent-drizz-test", nil)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/api/v1/sessions/abc/recordings", nil)
 	rctx := chi.NewRouteContext()
