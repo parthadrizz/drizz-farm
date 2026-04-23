@@ -1,0 +1,46 @@
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[project]
+name = "drizz-farm"
+version = "0.1.0"
+description = "Python client + pytest plugin for drizz-farm — self-hosted Android device lab"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Drizz Labs", email = "hello@drizz.ai" }]
+requires-python = ">=3.9"
+keywords = ["drizz-farm", "android", "emulator", "testing", "appium", "device-farm"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Framework :: Pytest",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Testing",
+]
+dependencies = [
+    "httpx>=0.24",
+]
+
+[project.optional-dependencies]
+pytest = ["pytest>=7.0"]
+dev = ["pytest>=7.0", "pytest-cov", "ruff"]
+
+[project.entry-points."pytest11"]
+drizz_farm = "drizz_farm.pytest_plugin"
+
+[project.urls]
+Homepage = "https://drizz.ai"
+Repository = "https://github.com/parthadrizz/drizz-farm"
+Documentation = "https://github.com/parthadrizz/drizz-farm#readme"
+Issues = "https://github.com/parthadrizz/drizz-farm/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["drizz_farm"]

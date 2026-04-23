@@ -126,6 +126,35 @@ drizz-farm is deliberately simple: each node is independent, a registry lists wh
 
 See [ARCHITECTURE.md](./ARCHITECTURE.md) for details.
 
+## How it compares
+
+| | drizz-farm | [appium-device-farm](https://github.com/AppiumTestDistribution/appium-device-farm) | [STF](https://github.com/openstf/stf) |
+|---|---|---|---|
+| **Status** | Actively developed | Active (~240 releases) | **Unmaintained** (last release 2020) |
+| **Install** | One brew / curl install, single Go binary | Appium 2.0 + Node + Prisma + DB | Node 8 + RethinkDB + ZeroMQ + protobuf |
+| **Android emulators** | ✓ first-class, boot-on-demand | ✓ | ✗ USB phones only |
+| **iOS** | Stubbed (planned) | ✓ simulators + physical | ✗ |
+| **Appium required** | ✗ optional — works with raw ADB | **✓ plugin for Appium** | ✗ (has its own control) |
+| **Declarative session capabilities** | ✓ `record_video` / `capture_logcat` / `capture_network` / `capture_screenshots` at create time | imperative start/stop per artifact | basic screenshots |
+| **Unified artifacts endpoint** | ✓ `GET /sessions/{id}/artifacts` lists + downloads all | separate endpoints per type | file download per screenshot |
+| **Device reservations** | ✓ with label, persisted across restarts, source-aware allocator | session locking | device booking (legacy) |
+| **Specific-device allocation** | ✓ `device_id` OR `avd_name` OR profile, fail-fast on busy | yes | limited |
+| **Multipart file / APK upload** | ✓ HTTP multipart from any CI | partial | partial |
+| **Camera injection → gallery** | ✓ multipart → `/sdcard/DCIM/Camera` + media scanner | not built in | not built in |
+| **Device simulation APIs** | 25+ endpoints (GPS, battery, sensors, permissions, timezone, dark mode, push notifications, clipboard, biometric, …) | Appium-level subset | basic remote control |
+| **Live streaming** | WebRTC H.264 (primary) + PNG WebSocket (fallback) | session recording replay | real-time screen share |
+| **Multi-node topology** | Registry (each node independent, no master) | Hub/node | Central provider |
+| **Tech** | Go daemon + embedded React + SQLite | TypeScript + React + Prisma | Node 8 + RethinkDB |
+| **License** | Apache 2.0 | Apache 2.0 | Apache 2.0 |
+| **Stars** | new | 588 | 13.9k (legacy) |
+
+**The short version:**
+
+- **vs STF** — STF is unmaintained. Don't compare; move on.
+- **vs appium-device-farm** — they're great if you already use Appium. drizz-farm is for the "I don't want to set up Appium + Node + a DB just to run Android tests" crowd. Our install is one binary, our API is HTTP (any language), and our per-session capability model means you declare what you want captured at session create and we handle start/stop/cleanup — you don't orchestrate recording state from your test runner.
+
+**Gaps we'll close:** iOS support, deeper Appium compatibility (drop-in server mode for Appium clients), session playback UI with event overlay, native clients for pytest/JUnit/TestNG.
+
 ## Deployment modes
 
 Same binary, three ways to deploy:
