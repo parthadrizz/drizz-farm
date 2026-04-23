@@ -226,12 +226,16 @@ func postMultipart(ctx context.Context, path string, files map[string][]byte, fi
 	return resp.StatusCode, b
 }
 
-// adbShell runs a raw shell command via our own /adb endpoint so we
-// don't depend on the test runner having adb installed separately.
-// Returns the concatenated stdout/stderr.
+// adbShell runs a shell command on the emulator via our /adb endpoint.
+// The server-side handler invokes `adb shell <command>`, so we pass
+// the bare command (e.g. "dumpsys battery") — NOT prefixed with
+// "shell". A stray "shell " in front makes adb try to execute a
+// binary named `shell` on the device, which doesn't exist → exit 127.
 func adbShell(ctx context.Context, sessionID, cmd string) string {
-	body := fmt.Sprintf(`{"command":"shell %s"}`, strings.ReplaceAll(cmd, `"`, `\"`))
-	_, out := httpPostJSON(ctx, "/sessions/"+sessionID+"/adb", body)
+	// JSON-encode the command so internal quotes survive the wire.
+	payload := map[string]string{"command": cmd}
+	body, _ := json.Marshal(payload)
+	_, out := httpPostJSON(ctx, "/sessions/"+sessionID+"/adb", string(body))
 	var parsed struct {
 		Output string `json:"output"`
 	}
@@ -1023,7 +1027,7 @@ func TestCapabilities_FullSuite(t *testing.T) {
 	canary := []struct {
 		name, path, body string
 	}{
-		{"Network profile (lte)", "network", `{"profile":"lte"}`},
+		{"Network profile (4g)", "network", `{"profile":"4g"}`},
 		{"Orientation portrait", "orientation", `{"orientation":"portrait"}`},
 		{"Volume set 5", "volume", `{"level":5}`},
 		{"Key press HOME", "key", `{"keycode":"HOME"}`},

@@ -61,7 +61,7 @@ type PoolResponse struct {
 
 type InstanceResponse struct {
 	ID      string `json:"id"`
-	AVDName string `json:"avd_name"`
+	AVDName string `json:"device_name"` // API field is device_name
 	State   string `json:"state"`
 	Serial  string `json:"serial"`
 	ADBPort int    `json:"adb_port"`
