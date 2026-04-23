@@ -3,7 +3,10 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -255,15 +258,179 @@ func (h *deviceHandlers) Biometric(w http.ResponseWriter, r *http.Request) {
 	JSON(w, 200, map[string]any{"status": "triggered", "action": req.Action})
 }
 
-// CameraInject handles POST /api/v1/sessions/:id/camera
+// CameraInject handles POST /api/v1/sessions/:id/camera.
+//
+// Accepts either multipart/form-data with an "image" file part OR a
+// JSON body of {"image_path": "/path/on/host"}. The image is pushed
+// to the emulator's gallery (/sdcard/DCIM/Camera/), then the media
+// scanner is kicked so the gallery app indexes it — the file picker
+// in any app under test now surfaces the injected image as a
+// selectable option. That's the real "upload-a-mock-image" flow;
+// directly wiring the emulator's live camera feed needs
+// -camera-back virtualscene flags at AVD boot, which requires a
+// restart and isn't worth it for 99% of test cases.
+//
+// Response includes the on-device path so tests can pass it to
+// things like Appium SendKeys on a file-input element.
 func (h *deviceHandlers) CameraInject(w http.ResponseWriter, r *http.Request) {
 	serial := h.findSerial(chi.URLParam(r, "id"))
-	if serial == "" { JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404}); return }
-	var req struct { ImagePath string `json:"image_path"` }
-	json.NewDecoder(r.Body).Decode(&req)
-	// Push image to device and set as virtualscene
-	h.adb.Push(r.Context(), serial, req.ImagePath, "/sdcard/camera_inject.jpg")
-	JSON(w, 200, map[string]any{"status": "injected"})
+	if serial == "" {
+		JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404})
+		return
+	}
+
+	localPath := ""
+	tmpCleanup := ""
+
+	contentType := r.Header.Get("Content-Type")
+	switch {
+	case strings.HasPrefix(contentType, "multipart/form-data"):
+		// Limit the form size so a hostile request can't exhaust memory.
+		if err := r.ParseMultipartForm(64 << 20); err != nil { // 64 MB
+			JSON(w, 400, ErrorResponse{Error: "bad_multipart", Message: err.Error(), Code: 400})
+			return
+		}
+		file, fh, err := r.FormFile("image")
+		if err != nil {
+			JSON(w, 400, ErrorResponse{Error: "missing_image", Message: "multipart field 'image' is required", Code: 400})
+			return
+		}
+		defer file.Close()
+		tmp, err := os.CreateTemp("", "drizz-camera-*"+filepath.Ext(fh.Filename))
+		if err != nil {
+			JSON(w, 500, ErrorResponse{Error: "tmp_failed", Message: err.Error(), Code: 500})
+			return
+		}
+		if _, err := io.Copy(tmp, file); err != nil {
+			tmp.Close()
+			os.Remove(tmp.Name())
+			JSON(w, 500, ErrorResponse{Error: "copy_failed", Message: err.Error(), Code: 500})
+			return
+		}
+		tmp.Close()
+		localPath = tmp.Name()
+		tmpCleanup = tmp.Name()
+
+	default:
+		var req struct {
+			ImagePath string `json:"image_path"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.ImagePath == "" {
+			JSON(w, 400, ErrorResponse{Error: "missing_image", Message: "either multipart 'image' or JSON image_path is required", Code: 400})
+			return
+		}
+		localPath = req.ImagePath
+	}
+
+	// Unique filename so repeat injections don't stomp each other and
+	// the gallery shows them separately.
+	ext := strings.ToLower(filepath.Ext(localPath))
+	if ext != ".jpg" && ext != ".jpeg" && ext != ".png" {
+		ext = ".jpg"
+	}
+	devicePath := fmt.Sprintf("/sdcard/DCIM/Camera/drizz_inject_%d%s", time.Now().UnixNano(), ext)
+
+	// Make sure the destination dir exists on device.
+	_, _ = h.adb.Shell(r.Context(), serial, "mkdir -p /sdcard/DCIM/Camera")
+
+	if err := h.adb.Push(r.Context(), serial, localPath, devicePath); err != nil {
+		if tmpCleanup != "" {
+			os.Remove(tmpCleanup)
+		}
+		JSON(w, 500, ErrorResponse{Error: "push_failed", Message: err.Error(), Code: 500})
+		return
+	}
+	if tmpCleanup != "" {
+		os.Remove(tmpCleanup)
+	}
+
+	// Kick the media scanner so the gallery picker sees the new image
+	// without waiting for its next poll.
+	_, _ = h.adb.Shell(r.Context(), serial,
+		fmt.Sprintf("am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file://%s", devicePath))
+
+	JSON(w, 200, map[string]any{
+		"status":      "injected",
+		"device_path": devicePath,
+	})
+}
+
+// UploadFile handles POST /api/v1/sessions/:id/files/upload.
+//
+// Multipart/form-data endpoint — the CI runner posts a file with the
+// "file" field and we push it to the device at the path given in the
+// "target" field (defaults to /sdcard/Download/<filename>).
+//
+// Exists because the existing file/push endpoint takes a `local_path`
+// on the drizz-farm host, which CI runners don't have. With upload,
+// the test sends the bytes and we handle the hop to the device.
+func (h *deviceHandlers) UploadFile(w http.ResponseWriter, r *http.Request) {
+	serial := h.findSerial(chi.URLParam(r, "id"))
+	if serial == "" {
+		JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404})
+		return
+	}
+	if err := r.ParseMultipartForm(256 << 20); err != nil { // 256 MB
+		JSON(w, 400, ErrorResponse{Error: "bad_multipart", Message: err.Error(), Code: 400})
+		return
+	}
+	file, fh, err := r.FormFile("file")
+	if err != nil {
+		JSON(w, 400, ErrorResponse{Error: "missing_file", Message: "multipart field 'file' is required", Code: 400})
+		return
+	}
+	defer file.Close()
+
+	target := r.FormValue("target")
+	if target == "" {
+		target = "/sdcard/Download/" + filepath.Base(fh.Filename)
+	}
+	// Guard against empty filename or weird traversal.
+	if filepath.Base(fh.Filename) == "" {
+		JSON(w, 400, ErrorResponse{Error: "bad_filename", Message: "filename is empty", Code: 400})
+		return
+	}
+
+	tmp, err := os.CreateTemp("", "drizz-upload-*"+filepath.Ext(fh.Filename))
+	if err != nil {
+		JSON(w, 500, ErrorResponse{Error: "tmp_failed", Message: err.Error(), Code: 500})
+		return
+	}
+	defer os.Remove(tmp.Name())
+	size, err := io.Copy(tmp, file)
+	if err != nil {
+		tmp.Close()
+		JSON(w, 500, ErrorResponse{Error: "copy_failed", Message: err.Error(), Code: 500})
+		return
+	}
+	tmp.Close()
+
+	// Ensure the parent dir exists on the device.
+	_, _ = h.adb.Shell(r.Context(), serial, "mkdir -p "+filepath.Dir(target))
+
+	if err := h.adb.Push(r.Context(), serial, tmp.Name(), target); err != nil {
+		JSON(w, 500, ErrorResponse{Error: "push_failed", Message: err.Error(), Code: 500})
+		return
+	}
+
+	// If the target is in a media directory, nudge the scanner so the
+	// gallery / file picker surfaces it immediately.
+	if strings.HasPrefix(target, "/sdcard/DCIM") ||
+		strings.HasPrefix(target, "/sdcard/Pictures") ||
+		strings.HasPrefix(target, "/sdcard/Movies") ||
+		strings.HasPrefix(target, "/sdcard/Music") ||
+		strings.HasPrefix(target, "/sdcard/Download") {
+		_, _ = h.adb.Shell(r.Context(), serial,
+			fmt.Sprintf("am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file://%s", target))
+	}
+
+	JSON(w, 200, map[string]any{
+		"status":      "uploaded",
+		"filename":    filepath.Base(fh.Filename),
+		"size":        size,
+		"device_path": target,
+	})
 }
 
 // Permissions handles POST /api/v1/sessions/:id/permissions
