@@ -290,3 +290,28 @@ func (s *Store) LoadReservations() (map[string]string, error) {
 	}
 	return out, nil
 }
+
+// EventsForSession returns all events recorded for a given session
+// ID, oldest first. Used by the playback timeline to merge server-side
+// lifecycle events (session_created, session_released, etc.) with
+// parsed logcat + HAR data.
+func (s *Store) EventsForSession(sessionID string) ([]EventRecord, error) {
+	if s == nil || s.db == nil {
+		return nil, nil
+	}
+	rows, err := s.db.Query(`
+		SELECT id, event_type, COALESCE(instance_id,''), COALESCE(session_id,''), COALESCE(detail,''), created_at
+		FROM events WHERE session_id = ? ORDER BY created_at ASC`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []EventRecord
+	for rows.Next() {
+		var r EventRecord
+		if err := rows.Scan(&r.ID, &r.Type, &r.Instance, &r.Session, &r.Detail, &r.CreatedAt); err == nil {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}

@@ -168,6 +168,22 @@ export function Sessions() {
               )}
 
               <ArtifactsPanel sessionID={s.id} />
+
+              {/* Playback link — only meaningful once the session
+                  has finished, because the video.mp4 finalizes on
+                  release. For active sessions we leave a hint but
+                  don't link (playback against an in-flight video
+                  is flaky and confuses users). */}
+              {(s.state === 'released' || s.state === 'timed_out' || s.state === 'interrupted') && (
+                <div className="mt-2 ml-7">
+                  <a
+                    href={`/playback/${s.id}`}
+                    className="text-xs text-primary hover:underline inline-flex items-center gap-1"
+                  >
+                    ▶ Open session playback
+                  </a>
+                </div>
+              )}
             </div>
           ))}
         </div>

@@ -6,6 +6,7 @@ import { Settings } from './pages/Settings';
 import { LiveView } from './pages/LiveView';
 import { GridView } from './pages/GridView';
 import { Nodes } from './pages/Nodes';
+import { Playback } from './pages/Playback';
 
 const navItems = [
   { to: '/', label: 'Dashboard', end: true },
@@ -43,6 +44,7 @@ function App() {
             <Route path="/nodes" element={<Nodes />} />
             <Route path="/grid" element={<GridView />} />
             <Route path="/live/:id" element={<LiveView />} />
+            <Route path="/playback/:id" element={<Playback />} />
           </Routes>
         </main>
       </div>

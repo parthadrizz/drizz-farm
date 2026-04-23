@@ -15,6 +15,7 @@ func RegisterRoutes(r chi.Router, cfg *config.Config, p *pool.Pool, b *session.B
 	sessH := &sessionHandlers{broker: b}
 	poolH := &poolHandlers{pool: p, store: deps.Store}
 	artH := &artifactHandlers{capture: deps.Capture, broker: b}
+	timelineH := &timelineHandlers{broker: b, store: deps.Store, dataDir: cfg.DataDir()}
 	nodeH := &nodeHandlers{
 		cfg:       cfg,
 		pool:      p,
@@ -151,6 +152,12 @@ func RegisterRoutes(r chi.Router, cfg *config.Config, p *pool.Pool, b *session.B
 		// new clients and the dashboard should use.
 		r.Get("/sessions/{id}/artifacts", artH.List)
 		r.Get("/sessions/{id}/artifacts/{filename}", artH.Serve)
+
+		// Playback timeline — merged event stream (lifecycle + logcat
+		// E/W + network HAR entries + screenshot markers) for the
+		// dashboard's session player. Video URL is embedded in the
+		// response so the player doesn't need a second round-trip.
+		r.Get("/sessions/{id}/timeline", timelineH.Get)
 		r.Post("/sessions/{id}/har/start", recH.StartHAR)
 		r.Post("/sessions/{id}/har/stop", recH.StopHAR)
 		r.Get("/sessions/{id}/har/download", recH.DownloadHAR)
