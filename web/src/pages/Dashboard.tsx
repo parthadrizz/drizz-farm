@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Server, Wifi, Plus, Smartphone, Lock, Unlock } from 'lucide-react';
 import { api, PoolStatus, NodeHealth, DeviceInstance, NodeEntry } from '../lib/api';
@@ -38,31 +38,56 @@ export function Dashboard() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const navigate = useNavigate();
 
+  // Guard against stale peer fetches from previous refresh ticks
+  // overwriting fresh state. A 2.5s timeout from tick N must never
+  // clobber the successful result from tick N+1.
+  const genRef = useRef(0);
+
   const refresh = async () => {
+    const gen = ++genRef.current;
     try {
-      // 1. Ask this node for the group + node list
+      // 1. Ask this node for the group + node list (local, fast).
       const [list, self] = await Promise.all([api.listNodes(), api.groupInfo()]);
+      if (gen !== genRef.current) return;
       setGroupName(list.group_name || '');
       setSelfName(self.self.name);
 
-      // 2. Fetch each node's state in parallel, browser-side. No backend proxying.
-      const snapshots = await Promise.all(
-        list.nodes.map(async (entry): Promise<NodeSnapshot> => {
-          try {
-            const [pool, health, avdsResp] = await Promise.all([
-              api.peer.pool(entry.url),
-              api.peer.health(entry.url),
-              api.peer.avds(entry.url).catch(() => ({ avds: [] })),
-            ]);
-            return { entry, online: true, pool, health, avds: avdsResp.avds || [] };
-          } catch (e: any) {
-            return { entry, online: false, error: e?.message || 'unreachable' };
-          }
-        })
-      );
-
-      setNodes(snapshots);
+      // 2. Render skeleton rows immediately so the page paints in <50ms
+      // even when some peer is unreachable. Without this, Promise.all
+      // below made the whole dashboard wait on the slowest peer — a
+      // powered-off Mac whose mDNS name is still cached costs 2.5s
+      // (the peerFetch timeout) on every refresh tick. Now each row
+      // updates independently as its fetches resolve, and offline
+      // peers just stay on their "offline" badge without blocking.
+      setNodes(prev => {
+        const byName = new Map(prev.map(n => [n.entry.name, n]));
+        return list.nodes.map(entry => byName.get(entry.name) ?? { entry, online: false });
+      });
       setError('');
+
+      // 3. Fetch each node's state in parallel and upsert as each completes.
+      list.nodes.forEach(async (entry) => {
+        try {
+          const [pool, health, avdsResp] = await Promise.all([
+            api.peer.pool(entry.url),
+            api.peer.health(entry.url),
+            api.peer.avds(entry.url).catch(() => ({ avds: [] })),
+          ]);
+          if (gen !== genRef.current) return;
+          setNodes(prev => prev.map(n =>
+            n.entry.name === entry.name
+              ? { entry, online: true, pool, health, avds: avdsResp.avds || [] }
+              : n
+          ));
+        } catch (e: any) {
+          if (gen !== genRef.current) return;
+          setNodes(prev => prev.map(n =>
+            n.entry.name === entry.name
+              ? { entry, online: false, error: e?.message || 'unreachable' }
+              : n
+          ));
+        }
+      });
     } catch (e: any) {
       setError(e.message);
     }

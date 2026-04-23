@@ -16,25 +16,36 @@ export function GridView() {
   const [live, setLive] = useState<LiveDevice[] | null>(null);
   const navigate = useNavigate();
 
+  // genRef discards results from superseded refresh ticks so a slow
+  // peer timing out at 2.5s on tick N can't overwrite the fresh grid
+  // rendered by tick N+1. Without this, a dead peer would flicker
+  // stale data into the view every ~5s.
+  const genRef = useRef(0);
+
   useEffect(() => {
     const refresh = async () => {
+      const gen = ++genRef.current;
       try {
         const list = await api.listNodes();
-        const results = await Promise.all(
-          list.nodes.map(async (node) => {
-            try {
-              const pool = await api.peer.pool(node.url);
-              return (pool.instances || [])
-                .filter((i: DeviceInstance) => i.state === 'warm' || i.state === 'allocated')
-                .map((inst: DeviceInstance) => ({ inst, nodeName: node.name, nodeURL: node.url }));
-            } catch {
-              return [] as LiveDevice[];
-            }
-          })
-        );
-        setLive(results.flat());
+        if (gen !== genRef.current) return;
+        if (live === null) setLive([]);
+        const perNode = new Map<string, LiveDevice[]>();
+        list.nodes.forEach(async (node) => {
+          try {
+            const pool = await api.peer.pool(node.url);
+            perNode.set(node.name, (pool.instances || [])
+              .filter((i: DeviceInstance) => i.state === 'warm' || i.state === 'allocated')
+              .map((inst: DeviceInstance) => ({ inst, nodeName: node.name, nodeURL: node.url })));
+          } catch {
+            perNode.set(node.name, []);
+          }
+          if (gen !== genRef.current) return;
+          const flat: LiveDevice[] = [];
+          perNode.forEach(v => flat.push(...v));
+          setLive(flat);
+        });
       } catch {
-        setLive([]);
+        if (gen === genRef.current) setLive([]);
       }
     };
     refresh();
