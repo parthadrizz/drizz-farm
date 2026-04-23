@@ -401,6 +401,10 @@ function GroupSection({
               placeholder="paste key shared by another node"
               className="w-full surface-2 border border-border rounded-lg px-3 py-2 text-sm font-mono text-foreground" />
           </div>
+          <div className="surface-0 rounded-lg border border-border/50 p-3 text-[11px] leading-relaxed text-muted-foreground">
+            <div className="text-foreground font-medium mb-1">Heads up — joining shares this Mac.</div>
+            Every member of the group will be able to list, boot, stop, and stream emulators on this machine, and claim sessions against its devices. They cannot read your files outside <code className="font-mono">~/.drizz-farm</code>, and they cannot remove this machine from the group (only you can <code className="font-mono">drizz-farm leave</code>).
+          </div>
           {joinError && <p className="text-sm text-destructive">{joinError}</p>}
           <div className="flex items-center justify-end gap-3">
             <button onClick={() => { setMode('choose'); setJoinURL(''); setJoinKey(''); setJoinError(''); }}

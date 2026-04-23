@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"net"
@@ -15,6 +16,8 @@ import (
 	"github.com/drizz-dev/drizz-farm/internal/registry"
 )
 
+var joinYes bool
+
 var joinCmd = &cobra.Command{
 	Use:   "join <peer-url> <group-key>",
 	Short: "Join an existing drizz-farm group",
@@ -25,18 +28,48 @@ Example:
   drizz-farm join http://mac-mini-1.local:9401 abc123def456...
 
 The daemon will import the group config locally and register this machine
-with the peer so other members see it.`,
+with the peer so other members see it.
+
+Joining shares this machine with everyone else in the group: any group
+member can boot emulators, allocate sessions, and stream this Mac's
+screens. Use --yes to skip the confirmation prompt.`,
 	Args: cobra.ExactArgs(2),
 	RunE: runJoin,
 }
 
 func init() {
+	joinCmd.Flags().BoolVarP(&joinYes, "yes", "y", false, "skip the confirmation prompt")
 	rootCmd.AddCommand(joinCmd)
 }
 
 func runJoin(cmd *cobra.Command, args []string) error {
 	peerURL := strings.TrimRight(args[0], "/")
 	groupKey := args[1]
+
+	// Spell out the implications of joining and require confirmation —
+	// joining is reversible (drizz-farm leave), but it's not benign:
+	// every member of the group can drive emulators on this Mac.
+	if !joinYes {
+		fmt.Println()
+		fmt.Println("  ⚠  Joining a group means:")
+		fmt.Println("       • Any group member can list, boot, and stop emulators on this Mac.")
+		fmt.Println("       • Any group member can stream this Mac's screens + claim sessions.")
+		fmt.Println("       • Any group member can read AVD names and device serials.")
+		fmt.Println()
+		fmt.Println("     Group members CANNOT:")
+		fmt.Println("       • Read your files outside ~/.drizz-farm.")
+		fmt.Println("       • Remove this machine from the group (only you can `drizz-farm leave`).")
+		fmt.Println()
+		fmt.Printf("     Joining %q via %s.\n", groupKey[:min(8, len(groupKey))]+"…", peerURL)
+		fmt.Print("     Continue? [y/N]: ")
+		reader := bufio.NewReader(os.Stdin)
+		ans, _ := reader.ReadString('\n')
+		ans = strings.TrimSpace(strings.ToLower(ans))
+		if ans != "y" && ans != "yes" {
+			fmt.Println("  Aborted.")
+			return nil
+		}
+	}
 
 	// Load config so we know our own name + external URL.
 	cfg, err := config.Load()
