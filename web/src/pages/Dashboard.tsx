@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Server, Wifi, Plus, Smartphone } from 'lucide-react';
+import { Server, Wifi, Plus, Smartphone, Lock, Unlock } from 'lucide-react';
 import { api, PoolStatus, NodeHealth, DeviceInstance, NodeEntry } from '../lib/api';
 import { StatusBadge } from '../components/StatusBadge';
 import { ActionButton } from '../components/ActionButton';
 import { EmptyState } from '../components/EmptyState';
+import { Kebab, KebabItem } from '../components/Kebab';
 import { CreateWizard } from './CreateWizard';
 
 // Per-node snapshot the dashboard assembles by talking to each node directly.
@@ -354,31 +355,70 @@ function NodeSection({
             }
             primary={isSelf ? { label: 'Add device', icon: Plus, onClick: onAdd } : undefined}
           />
-        ) : rows.map(({ name, displayName, inst, state }) => (
-          <div key={name} className="px-5 py-3 flex items-center gap-4 card-hover group animate-slide-in">
-            <div className="flex-1 min-w-0">
-              <div className="text-[13px] font-medium text-foreground truncate font-mono">{name}</div>
-              {displayName && <div className="text-[11px] text-purple-400 truncate mt-0.5">{displayName}</div>}
-              {inst && (
-                <div className="text-[10px] text-muted-foreground/60 font-mono mt-0.5">
-                  {inst.serial}:{inst.connection?.adb_port || '-'}
+        ) : rows.map(({ name, displayName, inst, state }) => {
+          const reserved = !!inst?.reserved;
+          const kebabItems: KebabItem[] = inst
+            ? [
+                reserved
+                  ? {
+                      label: 'Unreserve',
+                      icon: Unlock,
+                      onClick: async () => {
+                        try {
+                          await api.peer.unreserve(node.entry.url, inst.id);
+                        } catch (e: any) { alert(e?.message || 'unreserve failed'); }
+                      },
+                    }
+                  : {
+                      label: 'Reserve for manual',
+                      icon: Lock,
+                      onClick: async () => {
+                        const label = prompt('Optional label (who/why is this reserved?)') || '';
+                        try {
+                          await api.peer.reserve(node.entry.url, inst.id, label);
+                        } catch (e: any) { alert(e?.message || 'reserve failed'); }
+                      },
+                    },
+              ]
+            : [];
+          return (
+            <div key={name} className="px-5 py-3 flex items-center gap-4 card-hover group animate-slide-in">
+              <div className="flex-1 min-w-0">
+                <div className="text-[13px] font-medium text-foreground truncate font-mono flex items-center gap-2">
+                  {name}
+                  {reserved && (
+                    <span
+                      className="badge"
+                      title={inst?.reserved_label || 'Reserved for manual use — automated callers skip this device'}
+                      style={{ background: 'hsl(45 90% 60% / 0.12)', color: 'hsl(45 95% 65%)', border: '1px solid hsl(45 90% 60% / 0.25)' }}
+                    >
+                      RESERVED{inst?.reserved_label ? ` · ${inst.reserved_label}` : ''}
+                    </span>
+                  )}
                 </div>
-              )}
+                {displayName && <div className="text-[11px] text-purple-400 truncate mt-0.5">{displayName}</div>}
+                {inst && (
+                  <div className="text-[10px] text-muted-foreground/60 font-mono mt-0.5">
+                    {inst.serial}:{inst.connection?.adb_port || '-'}
+                  </div>
+                )}
+              </div>
+              <StatusBadge state={state} />
+              <div className="flex items-center gap-1.5 opacity-80 group-hover:opacity-100 transition-opacity">
+                {(state === 'warm' || state === 'allocated') && inst && (
+                  <ActionButton onClick={() => onView(inst.id)} variant="accent">View</ActionButton>
+                )}
+                {state === 'offline' && (
+                  <ActionButton onClick={() => onBoot(name)} loading={actionLoading === name} variant="primary">Start</ActionButton>
+                )}
+                {state === 'warm' && inst && (
+                  <ActionButton onClick={() => onShutdown(inst)} loading={actionLoading === inst.id} variant="danger">Stop</ActionButton>
+                )}
+                {kebabItems.length > 0 && <Kebab items={kebabItems} />}
+              </div>
             </div>
-            <StatusBadge state={state} />
-            <div className="flex gap-1.5 opacity-80 group-hover:opacity-100 transition-opacity">
-              {(state === 'warm' || state === 'allocated') && inst && (
-                <ActionButton onClick={() => onView(inst.id)} variant="accent">View</ActionButton>
-              )}
-              {state === 'offline' && (
-                <ActionButton onClick={() => onBoot(name)} loading={actionLoading === name} variant="primary">Start</ActionButton>
-              )}
-              {state === 'warm' && inst && (
-                <ActionButton onClick={() => onShutdown(inst)} loading={actionLoading === inst.id} variant="danger">Stop</ActionButton>
-              )}
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

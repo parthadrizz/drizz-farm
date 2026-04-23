@@ -87,6 +87,15 @@ func (s *Store) migrate() error {
 		CREATE INDEX IF NOT EXISTS idx_sessions_state ON sessions(state);
 		CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type);
 		CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
+
+		-- Per-AVD reservations. Keyed by avd_name (stable across daemon
+		-- restarts, unlike the runtime instance ID). On start we re-apply
+		-- Reserved=true to any instance whose AVD is in this table.
+		CREATE TABLE IF NOT EXISTS reservations (
+			avd_name TEXT PRIMARY KEY,
+			label TEXT NOT NULL DEFAULT '',
+			reserved_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
 	`)
 	if err != nil {
 		return err
@@ -228,4 +237,50 @@ func (s *Store) RecentEvents(limit int) ([]EventRecord, error) {
 		records = append(records, r)
 	}
 	return records, nil
+}
+
+// --- Reservations ---
+
+// SetReservation marks an AVD as reserved with an optional label.
+// Idempotent: repeating with a new label replaces the previous one.
+func (s *Store) SetReservation(avdName, label string) error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	_, err := s.db.Exec(`
+		INSERT INTO reservations (avd_name, label) VALUES (?, ?)
+		ON CONFLICT(avd_name) DO UPDATE SET label = excluded.label, reserved_at = CURRENT_TIMESTAMP
+	`, avdName, label)
+	return err
+}
+
+// ClearReservation removes the reservation for an AVD. No-op if not reserved.
+func (s *Store) ClearReservation(avdName string) error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	_, err := s.db.Exec(`DELETE FROM reservations WHERE avd_name = ?`, avdName)
+	return err
+}
+
+// LoadReservations returns all current reservations as a map
+// avd_name → label. Used at daemon start to re-apply reservations
+// to freshly-discovered instances.
+func (s *Store) LoadReservations() (map[string]string, error) {
+	out := map[string]string{}
+	if s == nil || s.db == nil {
+		return out, nil
+	}
+	rows, err := s.db.Query(`SELECT avd_name, label FROM reservations`)
+	if err != nil {
+		return out, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name, label string
+		if err := rows.Scan(&name, &label); err == nil {
+			out[name] = label
+		}
+	}
+	return out, nil
 }

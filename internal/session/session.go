@@ -101,4 +101,13 @@ type CreateSessionRequest struct {
 	Source     string            `json:"source,omitempty"`
 	Labels     map[string]string `json:"labels,omitempty"`
 	TimeoutMin int               `json:"timeout_minutes,omitempty"`
+
+	// Specific-device allocation. If DeviceID is set, the broker asks
+	// the pool for exactly that instance — 409 if it's already in use,
+	// 403 if it's reserved and the caller isn't a manual/dashboard
+	// source. AVDName is the fallback by-name lookup. Profile is
+	// ignored when either of these is set (the device already has a
+	// profile).
+	DeviceID string `json:"device_id,omitempty"`
+	AVDName  string `json:"avd_name,omitempty"`
 }

@@ -167,6 +167,17 @@ func runStart(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("pool start: %w", err)
 	}
 
+	// Restore reservations from SQLite — any AVD that was reserved before
+	// the daemon stopped should come back reserved. Unknown AVDs (e.g.
+	// deleted between runs) are silently ignored; they get pruned when
+	// an admin explicitly unreserves or rebuilds.
+	if dataStore != nil {
+		if resvs, err := dataStore.LoadReservations(); err == nil && len(resvs) > 0 {
+			emulatorPool.ApplyReservations(resvs)
+			log.Info().Int("count", len(resvs)).Msg("pool: restored reservations from store")
+		}
+	}
+
 	// Session broker — local-only, no federation
 	broker := session.NewBroker(cfg, emulatorPool, dataStore)
 	broker.Start(ctx)

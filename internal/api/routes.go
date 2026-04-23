@@ -13,7 +13,7 @@ import (
 // RegisterRoutes sets up all API routes on the router.
 func RegisterRoutes(r chi.Router, cfg *config.Config, p *pool.Pool, b *session.Broker, lic *license.Validator, deps ServerDeps) {
 	sessH := &sessionHandlers{broker: b}
-	poolH := &poolHandlers{pool: p}
+	poolH := &poolHandlers{pool: p, store: deps.Store}
 	nodeH := &nodeHandlers{
 		cfg:       cfg,
 		pool:      p,
@@ -72,6 +72,12 @@ func RegisterRoutes(r chi.Router, cfg *config.Config, p *pool.Pool, b *session.B
 		r.Get("/pool/available", poolH.Available)
 		r.Post("/pool/boot", poolH.Boot)
 		r.Post("/pool/shutdown", poolH.Shutdown)
+
+		// Devices — first-class list + reservation endpoints.
+		// GET /devices supports ?free, ?state, ?profile, ?kind, ?reserved filters.
+		r.Get("/devices", poolH.Devices)
+		r.Post("/devices/{id}/reserve", poolH.Reserve)
+		r.Delete("/devices/{id}/reserve", poolH.Unreserve)
 
 		// Node
 		r.Get("/node/health", nodeH.Health)

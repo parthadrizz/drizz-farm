@@ -109,6 +109,23 @@ func (b *Broker) Create(ctx context.Context, req CreateSessionRequest) (*Session
 	if req.Platform == "" {
 		req.Platform = "android"
 	}
+
+	// Specific-device path: caller named a device by ID or AVD name.
+	// Skip profile defaulting and skip the queue — specific requests
+	// fail fast if the named device isn't free (instead of falling
+	// back to something unexpected).
+	if req.DeviceID != "" || req.AVDName != "" {
+		inst, err := b.pool.AllocateWith(ctx, pool.AllocateOpts{
+			InstanceID: req.DeviceID,
+			AVDName:    req.AVDName,
+			Source:     req.Source,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("broker: allocate specific: %w", err)
+		}
+		return b.createSessionFromInstance(inst, req), nil
+	}
+
 	if req.Profile == "" {
 		// Default to first configured profile
 		for name := range b.cfg.Pool.Profiles.Android {
@@ -120,9 +137,16 @@ func (b *Broker) Create(ctx context.Context, req CreateSessionRequest) (*Session
 		}
 	}
 
-	// Try to allocate from local pool. If exhausted, queue — dashboard is
-	// responsible for picking a different node when this one is full.
-	inst, err := b.pool.Allocate(ctx, req.Profile)
+	// Profile-based path. Manual/dashboard callers are allowed to
+	// pick reserved devices (reservations protect against automated
+	// sources stealing them); CI/API sources skip reserved ones.
+	var inst *pool.DeviceInstance
+	var err error
+	if req.Source == "manual" || req.Source == "dashboard" {
+		inst, err = b.pool.AllocateForManual(ctx, req.Profile)
+	} else {
+		inst, err = b.pool.Allocate(ctx, req.Profile)
+	}
 	if err != nil {
 		if errors.Is(err, pool.ErrPoolExhausted) {
 			log.Info().Str("profile", req.Profile).Msg("broker: pool exhausted, queueing")

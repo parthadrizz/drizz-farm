@@ -214,15 +214,78 @@ func (p *Pool) Stop(ctx context.Context) error {
 	return nil
 }
 
+// AllocateOpts lets callers express "give me a specific device" vs
+// "any matching profile," plus a source tag that decides whether
+// reserved devices are skipped. Zero-value = "any warm, profile-blind,
+// treat as automated source (skip reservations)."
+type AllocateOpts struct {
+	ProfileName string // if set, prefer matching profile
+	InstanceID  string // if set, allocate exactly this instance (fails if not free)
+	AVDName     string // if set, allocate the instance whose AVD name matches
+	Source      string // "manual" / "dashboard" can use reserved instances; anything else skips them
+}
+
+// AllocateWith is the generalized allocator. Allocate (profile-only) delegates to it.
+func (p *Pool) AllocateWith(ctx context.Context, opts AllocateOpts) (*DeviceInstance, error) {
+	manualCaller := opts.Source == "manual" || opts.Source == "dashboard"
+
+	// Specific-device paths fail fast (don't fall through to "any warm")
+	// because the caller explicitly asked for this one.
+	if opts.InstanceID != "" || opts.AVDName != "" {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		for _, inst := range p.instances {
+			if opts.InstanceID != "" && inst.ID != opts.InstanceID {
+				continue
+			}
+			if opts.AVDName != "" && (inst.Device == nil || inst.Device.DisplayName() != opts.AVDName) {
+				continue
+			}
+			state := inst.GetState()
+			if state != StateWarm {
+				return nil, fmt.Errorf("device %s not available: state=%s", inst.ID, state)
+			}
+			if inst.IsReserved() && !manualCaller {
+				return nil, fmt.Errorf("device %s is reserved for manual use", inst.ID)
+			}
+			if err := inst.TransitionTo(StateAllocated); err != nil {
+				return nil, err
+			}
+			log.Info().Str("instance", inst.ID).Str("device", inst.Device.DisplayName()).Str("source", opts.Source).Msg("pool: allocated (specific)")
+			return inst, nil
+		}
+		return nil, fmt.Errorf("no device matches the specific request (id=%q, avd=%q)", opts.InstanceID, opts.AVDName)
+	}
+
+	return p.Allocate(ctx, opts.ProfileName)
+}
+
 // Allocate finds a warm device and transitions it to allocated.
 // If none warm, boots an emulator on-demand or picks a discovered USB device.
 func (p *Pool) Allocate(ctx context.Context, profileName string) (*DeviceInstance, error) {
+	return p.allocateAny(ctx, profileName, false)
+}
+
+// AllocateForManual is like Allocate but includes reserved devices in
+// the candidate set — the dashboard / human operator is the one
+// reservation was meant to protect, not a thing we gate.
+func (p *Pool) AllocateForManual(ctx context.Context, profileName string) (*DeviceInstance, error) {
+	return p.allocateAny(ctx, profileName, true)
+}
+
+func (p *Pool) allocateAny(ctx context.Context, profileName string, includeReserved bool) (*DeviceInstance, error) {
 	p.mu.Lock()
 
-	// 1. Find a warm instance (prefer profile match, fall back to any)
+	// 1. Find a warm instance (prefer profile match, fall back to any).
+	//    Automated callers (includeReserved=false) skip Reserved instances
+	//    so manual-reserved devices don't get yanked out from under a
+	//    human's nose by a CI job that happened to match the profile.
 	var anyWarm *DeviceInstance
 	for _, inst := range p.instances {
 		if inst.GetState() != StateWarm {
+			continue
+		}
+		if !includeReserved && inst.IsReserved() {
 			continue
 		}
 		if profileName != "" && inst.ProfileName == profileName {
@@ -822,4 +885,70 @@ func guessProfileForAVD(avdName string, cfg *config.Config) string {
 		return profileName
 	}
 	return ""
+}
+
+// ---- Reservation management ----
+
+// FindByInstanceID returns a snapshot of the instance with the given
+// ID, plus the underlying instance pointer for mutation. Returns
+// (nil, nil) when not found.
+func (p *Pool) FindByInstanceID(id string) *DeviceInstance {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.instances[id]
+}
+
+// FindByAVDName returns the instance whose device.DisplayName matches.
+// Returns nil when not found.
+func (p *Pool) FindByAVDName(name string) *DeviceInstance {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	for _, inst := range p.instances {
+		if inst.Device != nil && inst.Device.DisplayName() == name {
+			return inst
+		}
+	}
+	return nil
+}
+
+// ReserveInstance marks the instance as reserved (in-memory only).
+// Callers should also persist via store.SetReservation for durability.
+func (p *Pool) ReserveInstance(id, label string) error {
+	p.mu.RLock()
+	inst, ok := p.instances[id]
+	p.mu.RUnlock()
+	if !ok {
+		return fmt.Errorf("instance %s not found", id)
+	}
+	inst.Reserve(label)
+	return nil
+}
+
+// UnreserveInstance clears the in-memory reservation.
+func (p *Pool) UnreserveInstance(id string) error {
+	p.mu.RLock()
+	inst, ok := p.instances[id]
+	p.mu.RUnlock()
+	if !ok {
+		return fmt.Errorf("instance %s not found", id)
+	}
+	inst.Unreserve()
+	return nil
+}
+
+// ApplyReservations takes a map of avd_name → label and marks every
+// matching instance as reserved. Used at daemon startup to restore
+// reservations from the SQLite store. Unknown AVDs are ignored (they
+// may not have been booted yet; the next re-apply on boot picks them up).
+func (p *Pool) ApplyReservations(byAVDName map[string]string) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	for _, inst := range p.instances {
+		if inst.Device == nil {
+			continue
+		}
+		if label, ok := byAVDName[inst.Device.DisplayName()]; ok {
+			inst.Reserve(label)
+		}
+	}
 }

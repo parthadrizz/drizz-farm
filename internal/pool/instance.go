@@ -21,7 +21,38 @@ type DeviceInstance struct {
 	LastHealthy  time.Time   `json:"last_healthy"`
 	HealthFails  int         `json:"health_fails"`
 
+	// Reservation — when Reserved is true, automated callers (CI / API
+	// source) skip this instance. Manual / dashboard callers can still
+	// allocate it. ReservedLabel is optional free text the UI displays
+	// (e.g. "Partha's testing", "release-regression"). Empty label + true
+	// Reserved just means "reserved, unspecified."
+	Reserved      bool   `json:"reserved"`
+	ReservedLabel string `json:"reserved_label,omitempty"`
+
 	Device Device `json:"-"` // the actual device — not serialized
+}
+
+// Reserve marks this instance as reserved. Safe to call when already reserved.
+func (d *DeviceInstance) Reserve(label string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.Reserved = true
+	d.ReservedLabel = label
+}
+
+// Unreserve clears the reservation. Safe to call when not reserved.
+func (d *DeviceInstance) Unreserve() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.Reserved = false
+	d.ReservedLabel = ""
+}
+
+// IsReserved returns true when automated allocators should skip this instance.
+func (d *DeviceInstance) IsReserved() bool {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.Reserved
 }
 
 // TransitionTo attempts a state transition. Returns an error if invalid.
@@ -103,16 +134,18 @@ func (d *DeviceInstance) Snapshot() InstanceSnapshot {
 	defer d.mu.RUnlock()
 
 	snap := InstanceSnapshot{
-		ID:           d.ID,
-		NodeName:     d.NodeName,
-		ProfileName:  d.ProfileName,
-		State:        d.State,
-		SessionID:    d.SessionID,
-		CreatedAt:    d.CreatedAt,
-		AllocatedAt:  d.AllocatedAt,
-		LastActivity: d.LastActivity,
-		LastHealthy:  d.LastHealthy,
-		HealthFails:  d.HealthFails,
+		ID:            d.ID,
+		NodeName:      d.NodeName,
+		ProfileName:   d.ProfileName,
+		State:         d.State,
+		SessionID:     d.SessionID,
+		CreatedAt:     d.CreatedAt,
+		AllocatedAt:   d.AllocatedAt,
+		LastActivity:  d.LastActivity,
+		LastHealthy:   d.LastHealthy,
+		HealthFails:   d.HealthFails,
+		Reserved:      d.Reserved,
+		ReservedLabel: d.ReservedLabel,
 	}
 
 	if d.Device != nil {
@@ -128,21 +161,23 @@ func (d *DeviceInstance) Snapshot() InstanceSnapshot {
 
 // InstanceSnapshot is a read-only copy safe for JSON serialization.
 type InstanceSnapshot struct {
-	ID           string         `json:"id"`
-	NodeName     string         `json:"node_name"`
-	DeviceKind   DeviceKind     `json:"device_kind"`
-	DeviceName   string         `json:"device_name"`
-	DisplayInfo  string         `json:"display_info"` // e.g. "Pixel 7 · Android 14 · Play Store · API 34"
-	ProfileName  string         `json:"profile"`
-	State        DeviceState    `json:"state"`
-	Serial       string         `json:"serial"`
-	Connection   ConnectionInfo `json:"connection"`
-	SessionID    string         `json:"session_id,omitempty"`
-	CreatedAt    time.Time      `json:"created_at"`
-	AllocatedAt  *time.Time     `json:"allocated_at,omitempty"`
-	LastActivity time.Time      `json:"last_activity"`
-	LastHealthy  time.Time      `json:"last_healthy"`
-	HealthFails  int            `json:"health_fails"`
+	ID            string         `json:"id"`
+	NodeName      string         `json:"node_name"`
+	DeviceKind    DeviceKind     `json:"device_kind"`
+	DeviceName    string         `json:"device_name"`
+	DisplayInfo   string         `json:"display_info"` // e.g. "Pixel 7 · Android 14 · Play Store · API 34"
+	ProfileName   string         `json:"profile"`
+	State         DeviceState    `json:"state"`
+	Serial        string         `json:"serial"`
+	Connection    ConnectionInfo `json:"connection"`
+	SessionID     string         `json:"session_id,omitempty"`
+	CreatedAt     time.Time      `json:"created_at"`
+	AllocatedAt   *time.Time     `json:"allocated_at,omitempty"`
+	LastActivity  time.Time      `json:"last_activity"`
+	LastHealthy   time.Time      `json:"last_healthy"`
+	HealthFails   int            `json:"health_fails"`
+	Reserved      bool           `json:"reserved"`
+	ReservedLabel string         `json:"reserved_label,omitempty"`
 }
 
 // InvalidTransitionError indicates an invalid state transition attempt.

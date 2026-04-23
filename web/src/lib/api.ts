@@ -25,6 +25,8 @@ export interface DeviceInstance {
   created_at: string;
   last_activity: string;
   health_fails: number;
+  reserved?: boolean;
+  reserved_label?: string;
 }
 
 export interface ConnectionInfo {
@@ -174,6 +176,14 @@ export const api = {
       fetch(`${nodeURL}/api/v1/pool/boot`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ avd_name: avdName }) }).then(r => r.json()),
     shutdown: (nodeURL: string, instanceId: string) =>
       fetch(`${nodeURL}/api/v1/pool/shutdown`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ instance_id: instanceId }) }).then(r => r.json()),
+    reserve: (nodeURL: string, instanceId: string, label?: string) =>
+      fetch(`${nodeURL}/api/v1/devices/${encodeURIComponent(instanceId)}/reserve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label: label || '' }),
+      }).then(r => r.json()),
+    unreserve: (nodeURL: string, instanceId: string) =>
+      fetch(`${nodeURL}/api/v1/devices/${encodeURIComponent(instanceId)}/reserve`, { method: 'DELETE' }).then(r => r.json()),
   },
 
   // Discovery
@@ -202,4 +212,30 @@ export const api = {
     gpu?: string;
   }) =>
     fetchJSON<{ created: number; errors: string[] }>('/discovery/create-avds', { method: 'POST', body: JSON.stringify(data) }),
+
+  // Pool-level devices list with filters. `free=true` narrows to
+  // "warm AND not reserved" so automated callers see exactly what
+  // they can grab. (Different from `devices()` above which hits
+  // /discovery/devices for SDK-known device profiles.)
+  poolDevices: (filters?: { free?: boolean; state?: string; profile?: string; kind?: string; reserved?: boolean; node?: string }) => {
+    const q = new URLSearchParams();
+    if (filters?.free !== undefined) q.set('free', String(filters.free));
+    if (filters?.state) q.set('state', filters.state);
+    if (filters?.profile) q.set('profile', filters.profile);
+    if (filters?.kind) q.set('kind', filters.kind);
+    if (filters?.reserved !== undefined) q.set('reserved', String(filters.reserved));
+    if (filters?.node) q.set('node', filters.node);
+    const qs = q.toString();
+    return fetchJSON<{ devices: DeviceInstance[]; total: number }>(
+      qs ? `/devices?${qs}` : '/devices'
+    );
+  },
+  reserveDevice: (id: string, label?: string) =>
+    fetchJSON<{ status: string }>(`/devices/${encodeURIComponent(id)}/reserve`, {
+      method: 'POST',
+      body: JSON.stringify({ label: label || '' }),
+      headers: { 'Content-Type': 'application/json' },
+    }),
+  unreserveDevice: (id: string) =>
+    fetchJSON<{ status: string }>(`/devices/${encodeURIComponent(id)}/reserve`, { method: 'DELETE' }),
 };
