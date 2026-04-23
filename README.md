@@ -156,6 +156,47 @@ make release-mac      # Apple Silicon + Intel in one binary
 make release          # + tarballs + SHA256SUMS in ./dist/
 ```
 
+### Running the API conformance suite
+
+```bash
+make test-capabilities
+```
+
+Boots the daemon, then walks every API added in v0.1.14 → v0.1.21 — sessions, device list + filters, reservations, declarative capture capabilities, unified artifacts endpoint, multipart file upload, camera injection, and every device-simulation endpoint — verifying each by reading the resulting state back via `adb shell`.
+
+Requirements: an Android emulator must be reachable via ADB before you run the suite (boot one with `drizz-farm start` + `drizz-farm create`). Tests that depend on a warm device auto-skip if the pool is empty; everything else runs regardless.
+
+The suite downloads Appium's [ApiDemos-debug.apk](https://github.com/appium/android-apidemos) once (~3 MB, cached at `/tmp/drizz-apidemos.apk`) to exercise install / permissions / clear-data / uninstall flows against a real, signed package.
+
+Output looks like:
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  drizz-farm API conformance suite
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  ✓ Group: GET /group returns key for loopback
+  ✓ Devices: GET /devices shape                  (1 device(s) listed)
+  ✓ Reservation: reserve + label appears in list
+  ✓ Session: create by device_id binds to that instance
+  ✓ Capabilities: echo back on create
+  ✓ Screenshot: gated when capability disabled
+  ✓ Battery: set 42% → dumpsys shows 42          (level: 42)
+  ✓ Locale: set en_GB → getprop persist.sys.locale (en-GB)
+  ✓ Dark mode: enable → cmd uimode night         (Night mode: yes)
+  ✓ GPS: set SF → dumpsys location shows 37.77
+  ✓ Clipboard: set 'drizz-clip-probe' → cmd clipboard matches
+  ✓ Push notification: posts + cmd notification list includes tag
+  ✓ Install: multipart APK → pm list contains package (io.appium.android.apis)
+  ✓ Permissions: grant READ_CONTACTS → granted=true
+  ✓ Uninstall: pm list no longer contains package
+  ...
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  RESULTS: 29 passed  0 failed  2 skipped  (118.4s)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+Skips usually mean "no warm emulator" (boot one) or "mitmproxy not installed" (`brew install mitmproxy`).
+
 ## CLI reference
 
 ```

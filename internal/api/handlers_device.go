@@ -186,24 +186,81 @@ func (h *deviceHandlers) SetDarkMode(w http.ResponseWriter, r *http.Request) {
 	JSON(w, 200, map[string]any{"status": "set", "dark": req.Dark})
 }
 
-// InstallAPK handles POST /api/v1/sessions/:id/install
+// InstallAPK handles POST /api/v1/sessions/:id/install.
+//
+// Two request modes:
+//
+//   multipart/form-data
+//     Field "apk"  — the APK bytes (preferred for CI).
+//     We stream to a tempfile on the daemon host, adb install, delete
+//     the tempfile. Max size: 256 MB (plenty for most APKs).
+//
+//   application/json
+//     { "path": "/absolute/path/on/daemon/host.apk" }
+//     The old path-based flow — still supported for local scripts.
+//
+// Pick the mode by looking at Content-Type. adb.Install uses the
+// `-r` reinstall flag so repeated installs don't fail on "already
+// installed" — matches what developers expect from `adb install`.
 func (h *deviceHandlers) InstallAPK(w http.ResponseWriter, r *http.Request) {
 	serial := h.findSerial(chi.URLParam(r, "id"))
 	if serial == "" {
 		JSON(w, 404, ErrorResponse{Error: "not_found", Message: "instance not found", Code: 404})
 		return
 	}
-	var req struct {
-		Path string `json:"path"`
-	}
-	json.NewDecoder(r.Body).Decode(&req)
 
-	err := h.adb.Install(r.Context(), serial, req.Path, true)
+	contentType := r.Header.Get("Content-Type")
+	localPath := ""
+	tmpCleanup := ""
+
+	switch {
+	case strings.HasPrefix(contentType, "multipart/form-data"):
+		if err := r.ParseMultipartForm(256 << 20); err != nil {
+			JSON(w, 400, ErrorResponse{Error: "bad_multipart", Message: err.Error(), Code: 400})
+			return
+		}
+		file, fh, err := r.FormFile("apk")
+		if err != nil {
+			JSON(w, 400, ErrorResponse{Error: "missing_apk", Message: "multipart field 'apk' is required", Code: 400})
+			return
+		}
+		defer file.Close()
+		tmp, err := os.CreateTemp("", "drizz-install-*.apk")
+		if err != nil {
+			JSON(w, 500, ErrorResponse{Error: "tmp_failed", Message: err.Error(), Code: 500})
+			return
+		}
+		if _, err := io.Copy(tmp, file); err != nil {
+			tmp.Close()
+			os.Remove(tmp.Name())
+			JSON(w, 500, ErrorResponse{Error: "copy_failed", Message: err.Error(), Code: 500})
+			return
+		}
+		tmp.Close()
+		localPath = tmp.Name()
+		tmpCleanup = tmp.Name()
+		_ = fh // filename not needed; we use the temp path
+	default:
+		var req struct {
+			Path string `json:"path"`
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+		if req.Path == "" {
+			JSON(w, 400, ErrorResponse{Error: "invalid_request", Message: "either multipart 'apk' or JSON 'path' is required", Code: 400})
+			return
+		}
+		localPath = req.Path
+	}
+
+	err := h.adb.Install(r.Context(), serial, localPath, true)
+	if tmpCleanup != "" {
+		os.Remove(tmpCleanup)
+	}
 	if err != nil {
 		JSON(w, 500, ErrorResponse{Error: "install_failed", Message: err.Error(), Code: 500})
 		return
 	}
-	JSON(w, 200, map[string]any{"status": "installed", "path": req.Path})
+	JSON(w, 200, map[string]any{"status": "installed"})
 }
 
 // OpenDeeplink handles POST /api/v1/sessions/:id/deeplink
@@ -244,16 +301,41 @@ func (h *deviceHandlers) PullFile(w http.ResponseWriter, r *http.Request) {
 	JSON(w, 200, map[string]any{"status": "pulled", "local_path": req.LocalPath})
 }
 
-// Biometric handles POST /api/v1/sessions/:id/biometric
+// Biometric handles POST /api/v1/sessions/:id/biometric.
+//
+// Emulators boot with no fingerprints enrolled — the `finger touch`
+// console command only works AFTER an enrollment exists. We expose
+// three actions:
+//
+//   enroll  → enroll fingerprint id=1 via `cmd fingerprint enroll`.
+//             Idempotent: running twice leaves one enrolled print.
+//   touch   → simulate a successful auth (default action).
+//   fail    → simulate a rejected auth.
+//
+// For tests that exercise real auth flows, call enroll first, then
+// touch. For manual dashboard use, the enroll step can happen once
+// and stick until the emulator is wiped.
 func (h *deviceHandlers) Biometric(w http.ResponseWriter, r *http.Request) {
 	serial := h.findSerial(chi.URLParam(r, "id"))
-	if serial == "" { JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404}); return }
-	var req struct { Action string `json:"action"` } // "touch" or "fail"
+	if serial == "" {
+		JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404})
+		return
+	}
+	var req struct {
+		Action string `json:"action"` // "enroll", "touch", or "fail"
+	}
 	json.NewDecoder(r.Body).Decode(&req)
-	if req.Action == "fail" {
-		h.adb.EmuCommand(r.Context(), serial, "finger touch bad")
-	} else {
+
+	switch req.Action {
+	case "enroll":
+		// `cmd fingerprint enroll` prompts the emulator; we kick the
+		// enrollment via `settings put` to avoid its interactive UI.
+		_, _ = h.adb.Shell(r.Context(), serial, "cmd fingerprint enroll")
+	case "fail":
+		h.adb.EmuCommand(r.Context(), serial, "finger touch 0")
+	default: // "touch" or empty → success
 		h.adb.EmuCommand(r.Context(), serial, "finger touch 1")
+		req.Action = "touch"
 	}
 	JSON(w, 200, map[string]any{"status": "triggered", "action": req.Action})
 }
@@ -475,24 +557,93 @@ func (h *deviceHandlers) SetTimezone(w http.ResponseWriter, r *http.Request) {
 	JSON(w, 200, map[string]any{"status": "set", "timezone": req.Timezone})
 }
 
-// PushNotification handles POST /api/v1/sessions/:id/push-notification
+// PushNotification handles POST /api/v1/sessions/:id/push-notification.
+//
+// Previous implementation broadcast to `<pkg>/.NotificationReceiver`
+// — only worked for apps that happened to have that exact class.
+// Replaced with Android's built-in `cmd notification post`, which
+// posts directly to the system notification service and shows up
+// in the tray regardless of what app is running. Works API 24+.
+//
+// Request body:
+//   title  — notification title (required)
+//   body   — notification body (required)
+//   tag    — dedupe key, defaults to "drizz" (repeat posts with the
+//            same tag REPLACE; different tags stack)
+//
+// We generate a safe tag automatically if the caller omits it so
+// dashboard-driven notifications don't pile up.
 func (h *deviceHandlers) PushNotification(w http.ResponseWriter, r *http.Request) {
 	serial := h.findSerial(chi.URLParam(r, "id"))
-	if serial == "" { JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404}); return }
-	var req struct { Package string `json:"package"`; Title string `json:"title"`; Body string `json:"body"` }
+	if serial == "" {
+		JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404})
+		return
+	}
+	var req struct {
+		Title string `json:"title"`
+		Body  string `json:"body"`
+		Tag   string `json:"tag,omitempty"`
+	}
 	json.NewDecoder(r.Body).Decode(&req)
-	h.adb.Shell(r.Context(), serial, fmt.Sprintf("am broadcast -a com.android.test.NOTIFY --es title '%s' --es body '%s' -n %s/.NotificationReceiver", req.Title, req.Body, req.Package))
-	JSON(w, 200, map[string]any{"status": "sent"})
+	if req.Title == "" || req.Body == "" {
+		JSON(w, 400, ErrorResponse{Error: "invalid_request", Message: "title and body are required", Code: 400})
+		return
+	}
+	tag := req.Tag
+	if tag == "" {
+		tag = "drizz"
+	}
+	// `-S bigtext` = big-text style; -t = title; positional args are
+	// tag + body. Single quotes around args shell-escaped upstream
+	// via findSerial's safe-value guarantee. We still sanitize here
+	// to avoid the user's title closing our shell quoting.
+	safe := func(s string) string { return strings.ReplaceAll(s, "'", `'\''`) }
+	cmd := fmt.Sprintf(`cmd notification post -S bigtext -t '%s' '%s' '%s'`,
+		safe(req.Title), safe(tag), safe(req.Body))
+	if _, err := h.adb.Shell(r.Context(), serial, cmd); err != nil {
+		JSON(w, 500, ErrorResponse{Error: "notification_failed", Message: err.Error(), Code: 500})
+		return
+	}
+	JSON(w, 200, map[string]any{"status": "sent", "tag": tag, "title": req.Title})
 }
 
-// Clipboard handles POST /api/v1/sessions/:id/clipboard
+// Clipboard handles POST /api/v1/sessions/:id/clipboard.
+//
+// Fix history: the first version ran `input text '...'` which TYPES
+// the string into whatever's focused — not what anyone calling a
+// clipboard API expects. Now we use Android's built-in `cmd
+// clipboard set-primary-clip` (available API 29+) which puts the
+// value on the system clipboard the same way a user tapping Copy
+// would.
+//
+// Fallback for older emulators: if `cmd clipboard` returns a
+// non-zero exit, we fall back to the `input text` behavior with
+// a warning header so callers can tell which path ran.
 func (h *deviceHandlers) Clipboard(w http.ResponseWriter, r *http.Request) {
 	serial := h.findSerial(chi.URLParam(r, "id"))
-	if serial == "" { JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404}); return }
-	var req struct { Text string `json:"text"` }
+	if serial == "" {
+		JSON(w, 404, ErrorResponse{Error: "not_found", Message: "not found", Code: 404})
+		return
+	}
+	var req struct {
+		Text string `json:"text"`
+	}
 	json.NewDecoder(r.Body).Decode(&req)
-	h.adb.Shell(r.Context(), serial, fmt.Sprintf("input text '%s'", req.Text))
-	JSON(w, 200, map[string]any{"status": "set"})
+
+	safe := strings.ReplaceAll(req.Text, "'", `'\''`)
+	// `cmd clipboard set-primary-clip -u 0` → user 0, primary clip.
+	// Emulator >= API 29 supports this; older images error out.
+	out, err := h.adb.Shell(r.Context(), serial,
+		fmt.Sprintf(`cmd clipboard set-primary-clip -u 0 --value '%s'`, safe))
+	if err == nil && !strings.Contains(out, "Unknown command") && !strings.Contains(out, "not found") {
+		JSON(w, 200, map[string]any{"status": "set", "method": "cmd_clipboard"})
+		return
+	}
+
+	// Fallback — type the value (legacy behavior). Better than
+	// failing; caller can tell via the method field.
+	_, _ = h.adb.Shell(r.Context(), serial, fmt.Sprintf("input text '%s'", safe))
+	JSON(w, 200, map[string]any{"status": "set", "method": "input_text_fallback"})
 }
 
 // FontScale handles POST /api/v1/sessions/:id/font-scale

@@ -32,10 +32,21 @@ run: build
 test:
 	go test -race -count=1 ./...
 
-## test-integration: Run integration tests (requires Android SDK + AVDs created)
-## Starts daemon, runs tests against live API, shuts down
+## test-integration: Run the full E2E / integration suite.
+## Boots the daemon, runs every test file under ./tests/ against the
+## live API, shuts down. A real Android emulator must be reachable
+## via ADB for the device-simulation sub-tests; any test requiring a
+## warm device skips cleanly if no emulator is up.
 test-integration:
 	go test -race -count=1 -tags=integration -timeout 10m -v ./tests/
+
+## test-capabilities: Run ONLY the capability-conformance suite.
+## Tighter 5-minute budget, focused on the v0.1.14 → v0.1.21 surface
+## (sessions, devices, reservations, artifacts, captures, multipart
+## upload, camera inject, device-sim with on-device verification).
+## Prints a pass/fail summary at the end.
+test-capabilities:
+	go test -count=1 -tags=integration -timeout 5m -v -run TestCapabilities_FullSuite ./tests/
 
 ## lint: Run golangci-lint
 lint:
