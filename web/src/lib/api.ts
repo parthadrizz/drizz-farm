@@ -1,5 +1,27 @@
 const BASE = '/api/v1';
 
+// peerFetch = fetch() with an AbortController timeout. Browser's
+// default fetch has no timeout — a dead peer's TCP connect can hang
+// 30+ seconds, making the dashboard appear frozen. 2.5s is the
+// sweet spot for a LAN: long enough for a real slow-but-alive peer,
+// short enough that a powered-off machine flips to OFFLINE in one
+// refresh tick. Callers that need longer (boot / shutdown are
+// remote operations that actually do real work) can pass a custom
+// timeoutMs.
+//
+// Throws AbortError on timeout — existing `.catch()` paths in the
+// peer methods mark the node offline on any error, which is the
+// right behavior for a timeout too.
+async function peerFetch(url: string, init?: RequestInit, timeoutMs = 2500): Promise<Response> {
+  const ctrl = new AbortController();
+  const id = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: ctrl.signal });
+  } finally {
+    clearTimeout(id);
+  }
+}
+
 export interface PoolStatus {
   node_name: string;
   total_capacity: number;
@@ -167,23 +189,40 @@ export const api = {
     fetchJSON<any>(`/nodes/${encodeURIComponent(name)}`, { method: 'DELETE', headers: { 'X-Group-Key': key } }),
 
   // Cross-node calls — talk directly to the peer's URL from the browser.
-  // `nodeURL` is the peer's external_url from /nodes (e.g. http://mac-2.local:9401).
+  // `nodeURL` is the peer's external_url from /nodes (e.g.
+  // http://mac-2.local:9401).
+  //
+  // Every peer fetch is timeboxed via AbortController. Without a
+  // timeout, a peer whose mDNS name is still cached but whose machine
+  // is actually off makes the browser hang on the dead TCP connect
+  // for ~30-120s — the dashboard goes to "waiting" forever. 2.5s
+  // is long enough for a slow Wi-Fi LAN, short enough that "the
+  // other Mac is off" flips to OFFLINE in one refresh cycle.
   peer: {
-    pool: (nodeURL: string) => fetch(`${nodeURL}/api/v1/pool`).then(r => r.json()),
-    health: (nodeURL: string) => fetch(`${nodeURL}/api/v1/node/health`).then(r => r.json()),
-    avds: (nodeURL: string) => fetch(`${nodeURL}/api/v1/discovery/avds`).then(r => r.json()),
+    pool: (nodeURL: string) => peerFetch(`${nodeURL}/api/v1/pool`).then(r => r.json()),
+    health: (nodeURL: string) => peerFetch(`${nodeURL}/api/v1/node/health`).then(r => r.json()),
+    avds: (nodeURL: string) => peerFetch(`${nodeURL}/api/v1/discovery/avds`).then(r => r.json()),
     boot: (nodeURL: string, avdName: string) =>
-      fetch(`${nodeURL}/api/v1/pool/boot`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ avd_name: avdName }) }).then(r => r.json()),
+      peerFetch(`${nodeURL}/api/v1/pool/boot`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ avd_name: avdName }),
+      }, 10_000).then(r => r.json()),
     shutdown: (nodeURL: string, instanceId: string) =>
-      fetch(`${nodeURL}/api/v1/pool/shutdown`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ instance_id: instanceId }) }).then(r => r.json()),
+      peerFetch(`${nodeURL}/api/v1/pool/shutdown`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ instance_id: instanceId }),
+      }, 10_000).then(r => r.json()),
     reserve: (nodeURL: string, instanceId: string, label?: string) =>
-      fetch(`${nodeURL}/api/v1/devices/${encodeURIComponent(instanceId)}/reserve`, {
+      peerFetch(`${nodeURL}/api/v1/devices/${encodeURIComponent(instanceId)}/reserve`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ label: label || '' }),
       }).then(r => r.json()),
     unreserve: (nodeURL: string, instanceId: string) =>
-      fetch(`${nodeURL}/api/v1/devices/${encodeURIComponent(instanceId)}/reserve`, { method: 'DELETE' }).then(r => r.json()),
+      peerFetch(`${nodeURL}/api/v1/devices/${encodeURIComponent(instanceId)}/reserve`,
+        { method: 'DELETE' }).then(r => r.json()),
   },
 
   // Discovery
