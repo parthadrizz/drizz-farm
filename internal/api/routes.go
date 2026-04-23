@@ -49,6 +49,13 @@ func RegisterRoutes(r chi.Router, cfg *config.Config, p *pool.Pool, b *session.B
 	webrtcH := &webrtcHandlers{pool: p, sdk: deps.SDK}
 
 	regH := &registryHandlers{reg: deps.Registry, cfg: cfg}
+	appH := newAppiumCompatHandlers(b)
+
+	// Appium-compat server — lets existing Appium clients use drizz-farm
+	// as a drop-in hub by pointing at /wd/hub/session. See handlers_appium.go.
+	r.Post("/wd/hub/session", appH.Create)
+	r.HandleFunc("/wd/hub/session/{sid}/*", appH.Proxy)
+	r.HandleFunc("/wd/hub/session/{sid}", appH.Proxy)
 
 	r.Route("/api/v1", func(r chi.Router) {
 		// Group / registry — who's in this group, where are they?

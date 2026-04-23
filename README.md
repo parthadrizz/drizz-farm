@@ -153,7 +153,32 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for details.
 - **vs STF** — STF is unmaintained. Don't compare; move on.
 - **vs appium-device-farm** — they're great if you already use Appium. drizz-farm is for the "I don't want to set up Appium + Node + a DB just to run Android tests" crowd. Our install is one binary, our API is HTTP (any language), and our per-session capability model means you declare what you want captured at session create and we handle start/stop/cleanup — you don't orchestrate recording state from your test runner.
 
-**Gaps we'll close:** iOS support, deeper Appium compatibility (drop-in server mode for Appium clients), session playback UI with event overlay, native clients for pytest/JUnit/TestNG.
+**Gaps we'll close:** iOS support, session playback UI with event overlay, JUnit/TestNG clients.
+
+## Appium compatibility
+
+Existing Appium suites can point at drizz-farm with a single URL change:
+
+```python
+from appium import webdriver
+
+driver = webdriver.Remote(
+    "http://farm.local:9401/wd/hub",   # ← drizz-farm, not an Appium hub
+    desired_capabilities={
+        "platformName": "Android",
+        "appium:automationName": "UiAutomator2",
+        "appium:app": "/path/to/app.apk",
+        # Optional drizz-farm extensions
+        "drizz:profile": "api34_play",
+        "drizz:record_video": True,
+        "drizz:capture_logcat": True,
+    },
+)
+```
+
+drizz-farm allocates the device, spawns Appium behind the scenes, and transparently proxies every W3C WebDriver command to it. On `driver.quit()`, captures stop, video lands in `/api/v1/sessions/{id}/artifacts`.
+
+`drizz:*` capabilities map 1:1 to session options — `profile`, `device_id`, `avd_name`, `record_video`, `capture_logcat`, `capture_screenshots`, `capture_network`, `retention_hours`, `timeout_minutes`.
 
 ## Deployment modes
 
