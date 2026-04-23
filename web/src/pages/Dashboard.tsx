@@ -268,13 +268,40 @@ function NodeSection({
   if (!node.online) {
     return (
       <div className="section-card p-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Server className="w-3.5 h-3.5 text-muted-foreground" />
-            <span className="text-sm text-muted-foreground">{node.entry.name}</span>
-            <span className="text-xs font-mono text-muted-foreground/60">{node.entry.url}</span>
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 min-w-0">
+            <Server className="w-3.5 h-3.5 text-destructive/70 flex-shrink-0" />
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-foreground">{node.entry.name}</span>
+                <span className="badge badge-error">OFFLINE</span>
+                {isSelf && <span className="badge badge-node">THIS NODE</span>}
+              </div>
+              <div className="text-[11px] font-mono text-muted-foreground truncate">
+                {node.entry.url}
+              </div>
+              <div className="text-[11px] text-muted-foreground mt-0.5">
+                Not reachable on the network — is this Mac powered on, awake, and on the same LAN?
+                {node.error && <> · <span className="font-mono opacity-70">{node.error}</span></>}
+              </div>
+            </div>
           </div>
-          <span className="badge badge-error">OFFLINE</span>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <a
+              href={node.entry.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="action-btn surface-3 text-foreground text-xs"
+            >
+              Open
+            </a>
+            <a
+              href="/nodes"
+              className="action-btn surface-3 text-muted-foreground hover:text-foreground text-xs"
+            >
+              Manage
+            </a>
+          </div>
         </div>
       </div>
     );

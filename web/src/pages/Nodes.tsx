@@ -9,9 +9,13 @@
  * backend proxying.
  */
 import { useEffect, useState } from 'react';
-import { Server, ExternalLink, Eye, EyeOff, Copy, Check, Wifi, RefreshCw, Plus } from 'lucide-react';
+import {
+  Server, ExternalLink, Eye, EyeOff, Copy, Check, Wifi, RefreshCw, Plus,
+  Trash2, ExternalLink as OpenIcon, LogOut,
+} from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { api, GroupInfo, NodeList, NodeEntry } from '../lib/api';
+import { Kebab, ConfirmDialog, KebabItem } from '../components/Kebab';
 
 type Health = 'online' | 'offline' | 'checking';
 
@@ -32,6 +36,9 @@ export function Nodes() {
   const [showKey, setShowKey] = useState(false);
   const [copied, setCopied] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [removeTarget, setRemoveTarget] = useState<NodeEntry | null>(null);
+  const [leaveOpen, setLeaveOpen] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const load = async () => {
     setRefreshing(true);
@@ -72,6 +79,27 @@ export function Nodes() {
     navigator.clipboard.writeText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleRemovePeer = async () => {
+    if (!removeTarget) return;
+    try {
+      await api.removeNode(group?.group_key || '', removeTarget.name);
+      setRemoveTarget(null);
+      load();
+    } catch (e: any) {
+      setActionError(e?.message || 'remove failed');
+    }
+  };
+
+  const handleLeave = async () => {
+    try {
+      await api.leaveGroup();
+      setLeaveOpen(false);
+      load();
+    } catch (e: any) {
+      setActionError(e?.message || 'leave failed');
+    }
   };
 
   // Standalone — no group yet. Send the user to Settings to create/join.
@@ -179,6 +207,9 @@ export function Nodes() {
               node={n}
               isSelf={n.name === group?.self?.name}
               health={healths[n.name] ?? 'checking'}
+              onCopyURL={() => copy(n.url)}
+              onRemove={() => setRemoveTarget(n)}
+              onLeave={() => setLeaveOpen(true)}
             />
           ))}
           {(!nodes || nodes.nodes.length === 0) && (
@@ -188,6 +219,44 @@ export function Nodes() {
           )}
         </div>
       </div>
+
+      {actionError && (
+        <div className="text-sm text-destructive">{actionError}</div>
+      )}
+
+      <ConfirmDialog
+        open={removeTarget !== null}
+        title={`Remove ${removeTarget?.name}?`}
+        description={
+          <>
+            This removes <span className="font-mono text-foreground">{removeTarget?.name}</span> from the
+            group's roster on every node. The peer's machine will stop showing as a member here, and
+            other nodes will drop it on their next refresh. The peer itself stays running and unaware
+            until it next checks for the group — at which point it'll know it was removed.
+          </>
+        }
+        confirmLabel="Remove"
+        danger
+        onConfirm={handleRemovePeer}
+        onCancel={() => setRemoveTarget(null)}
+      />
+
+      <ConfirmDialog
+        open={leaveOpen}
+        title="Leave the group?"
+        description={
+          <>
+            This Mac will go back to standalone mode. Other group members will lose visibility into
+            this node's emulators, and any sessions allocated by them will be released. You can
+            re-join later with <code className="font-mono">drizz-farm join</code> if you keep the
+            group key.
+          </>
+        }
+        confirmLabel="Leave group"
+        danger
+        onConfirm={handleLeave}
+        onCancel={() => setLeaveOpen(false)}
+      />
     </div>
   );
 }
@@ -196,10 +265,16 @@ function NodeRow({
   node,
   isSelf,
   health,
+  onCopyURL,
+  onRemove,
+  onLeave,
 }: {
   node: NodeEntry;
   isSelf: boolean;
   health: Health;
+  onCopyURL: () => void;
+  onRemove: () => void;
+  onLeave: () => void;
 }) {
   const dotClass =
     health === 'online'
@@ -210,45 +285,52 @@ function NodeRow({
   const label =
     health === 'online' ? 'online' : health === 'offline' ? 'offline' : 'checking…';
 
-  // For self, route in-app. For peers, open the peer's own dashboard
-  // in a new tab — that's the registry model: each node owns its UI.
-  const Wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
-    isSelf ? (
-      <Link to="/" className="block">
-        {children}
-      </Link>
-    ) : (
-      <a
-        href={node.url}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="block"
-      >
-        {children}
-      </a>
-    );
+  const openPeer = () => {
+    if (isSelf) return; // self-row click handled by Link below
+    window.open(node.url, '_blank', 'noopener,noreferrer');
+  };
+
+  // Per-row menu: open / copy / remove (peer) or leave (self).
+  const items: KebabItem[] = isSelf
+    ? [
+        { label: 'Copy my URL', icon: Copy, onClick: onCopyURL },
+        { label: 'Leave group', icon: LogOut, danger: true, onClick: onLeave },
+      ]
+    : [
+        { label: 'Open dashboard', icon: OpenIcon, onClick: openPeer },
+        { label: 'Copy URL', icon: Copy, onClick: onCopyURL },
+        { label: 'Remove from group', icon: Trash2, danger: true, onClick: onRemove },
+      ];
 
   return (
-    <Wrapper>
-      <div className="px-5 py-4 flex items-center justify-between hover:surface-2 transition-colors">
-        <div className="flex items-center gap-3">
-          <Server className="w-3.5 h-3.5 text-muted-foreground" />
-          <div>
-            <div className="text-sm font-medium text-foreground flex items-center gap-2">
-              {node.name}
-              {isSelf && <span className="badge badge-node">THIS NODE</span>}
-            </div>
-            <div className="text-[11px] font-mono text-muted-foreground">{node.url}</div>
+    <div className="px-5 py-4 flex items-center justify-between hover:surface-2 transition-colors">
+      <div
+        className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer"
+        onClick={isSelf ? undefined : openPeer}
+      >
+        <Server className="w-3.5 h-3.5 text-muted-foreground" />
+        <div className="min-w-0">
+          <div className="text-sm font-medium text-foreground flex items-center gap-2">
+            {isSelf ? (
+              <Link to="/" className="hover:underline">
+                {node.name}
+              </Link>
+            ) : (
+              <span>{node.name}</span>
+            )}
+            {isSelf && <span className="badge badge-node">THIS NODE</span>}
           </div>
-        </div>
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <span className={`w-1.5 h-1.5 rounded-full ${dotClass}`} />
-            {label}
-          </div>
-          {!isSelf && <ExternalLink className="w-3.5 h-3.5 text-muted-foreground" />}
+          <div className="text-[11px] font-mono text-muted-foreground truncate">{node.url}</div>
         </div>
       </div>
-    </Wrapper>
+      <div className="flex items-center gap-3">
+        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <span className={`w-1.5 h-1.5 rounded-full ${dotClass}`} />
+          {label}
+        </div>
+        {!isSelf && <ExternalLink className="w-3.5 h-3.5 text-muted-foreground" />}
+        <Kebab items={items} />
+      </div>
+    </div>
   );
 }
