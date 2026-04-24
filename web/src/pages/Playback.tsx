@@ -274,26 +274,44 @@ function FilterChips({
     next.has(key) ? next.delete(key) : next.add(key);
     setter(next);
   };
+  // Chips are click-to-filter toggles: active = this kind shows, inactive
+  // = hidden. Used to render indistinguishable surface-2/3 tones that
+  // made it impossible to tell which were selected. Now active chips
+  // get a primary-colored border + filled background; inactive ones
+  // are muted with a clear "hidden" look. A small checkmark reinforces
+  // state for anyone who can't perceive the color difference.
   const chip = (active: boolean, label: string, onClick: () => void) => (
     <button
       onClick={onClick}
-      className={`px-2 py-0.5 rounded-md text-[11px] transition ${
-        active ? 'surface-3 text-foreground' : 'surface-2 text-muted-foreground hover:text-foreground'
+      aria-pressed={active}
+      title={active ? `Hide ${label}` : `Show ${label}`}
+      className={`px-2.5 py-1 rounded-md text-[11px] border transition inline-flex items-center gap-1 ${
+        active
+          ? 'border-primary bg-primary/15 text-foreground'
+          : 'border-border bg-transparent text-muted-foreground/60 line-through opacity-60 hover:opacity-100 hover:text-foreground'
       }`}
     >
+      {active && <span className="text-primary">✓</span>}
       {label}
     </button>
   );
   return (
-    <div className="flex flex-wrap items-center gap-1.5 mb-2 text-[11px]">
-      {chip(filter.has('lifecycle'), 'lifecycle', () => toggle(filter, setFilter, 'lifecycle'))}
-      {chip(filter.has('logcat'), 'logcat', () => toggle(filter, setFilter, 'logcat'))}
-      {chip(filter.has('network'), 'network', () => toggle(filter, setFilter, 'network'))}
-      {chip(filter.has('screenshot'), 'screenshot', () => toggle(filter, setFilter, 'screenshot'))}
-      <span className="mx-1 text-muted-foreground/50">·</span>
-      {chip(levelFilter.has('info'), 'info', () => toggle(levelFilter, setLevelFilter, 'info'))}
-      {chip(levelFilter.has('warn'), 'warn', () => toggle(levelFilter, setLevelFilter, 'warn'))}
-      {chip(levelFilter.has('error'), 'error', () => toggle(levelFilter, setLevelFilter, 'error'))}
+    <div className="mb-3">
+      <div className="text-[11px] text-muted-foreground mb-1.5">
+        Click to toggle — active filters have a colored border; crossed-out ones are hidden.
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-[10px] uppercase tracking-wider text-muted-foreground/70 mr-1">Type</span>
+        {chip(filter.has('lifecycle'), 'lifecycle', () => toggle(filter, setFilter, 'lifecycle'))}
+        {chip(filter.has('logcat'), 'logcat', () => toggle(filter, setFilter, 'logcat'))}
+        {chip(filter.has('network'), 'network', () => toggle(filter, setFilter, 'network'))}
+        {chip(filter.has('screenshot'), 'screenshot', () => toggle(filter, setFilter, 'screenshot'))}
+        <span className="mx-2 text-muted-foreground/30">│</span>
+        <span className="text-[10px] uppercase tracking-wider text-muted-foreground/70 mr-1">Level</span>
+        {chip(levelFilter.has('info'), 'info', () => toggle(levelFilter, setLevelFilter, 'info'))}
+        {chip(levelFilter.has('warn'), 'warn', () => toggle(levelFilter, setLevelFilter, 'warn'))}
+        {chip(levelFilter.has('error'), 'error', () => toggle(levelFilter, setLevelFilter, 'error'))}
+      </div>
     </div>
   );
 }
