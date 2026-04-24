@@ -247,7 +247,7 @@ export const api = {
       body: JSON.stringify({ path }),
     }),
   devices: () => fetchJSON<{ devices: string[] }>('/discovery/devices'),
-  avds: () => fetchJSON<{ avds: { name: string }[] }>('/discovery/avds'),
+  avds: () => fetchJSON<{ avds: { name: string; display_name?: string }[] }>('/discovery/avds'),
   createAVDs: (data: {
     profile_name: string;
     device: string;
