@@ -9,19 +9,21 @@ import (
 type SessionState int
 
 const (
-	SessionQueued   SessionState = iota // Waiting for an emulator
-	SessionActive                       // Emulator allocated, in use
-	SessionReleased                     // Explicitly released by user
-	SessionTimedOut                     // Auto-released due to timeout
-	SessionErrored                      // Released due to error
+	SessionQueued      SessionState = iota // Waiting for an emulator
+	SessionActive                          // Emulator allocated, in use
+	SessionReleased                        // Explicitly released by user
+	SessionTimedOut                        // Auto-released due to timeout
+	SessionErrored                         // Released due to error
+	SessionInterrupted                     // Underlying emulator disappeared mid-session
 )
 
 var stateNames = map[SessionState]string{
-	SessionQueued:   "queued",
-	SessionActive:   "active",
-	SessionReleased: "released",
-	SessionTimedOut: "timed_out",
-	SessionErrored:  "errored",
+	SessionQueued:      "queued",
+	SessionActive:      "active",
+	SessionReleased:    "released",
+	SessionTimedOut:    "timed_out",
+	SessionErrored:     "errored",
+	SessionInterrupted: "interrupted",
 }
 
 // String returns the lowercase string representation of a SessionState.

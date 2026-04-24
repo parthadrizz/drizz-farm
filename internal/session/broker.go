@@ -96,7 +96,56 @@ func NewBroker(cfg *config.Config, p *pool.Pool, s *store.Store) *Broker {
 		}
 	})
 
+	// Pool eviction — the watchdog detected a dead emulator. Finalize
+	// captures, flip the session to 'interrupted', release the Appium
+	// server, and fire the webhook so CI knows the run didn't just
+	// hang forever.
+	p.SetOnInstanceEvicted(func(instanceID, sessionID, reason string) {
+		b.handleInstanceEvicted(instanceID, sessionID, reason)
+	})
+
 	return b
+}
+
+// handleInstanceEvicted cleans up a session whose emulator disappeared
+// out from under it. Idempotent; no-op if the session is already gone
+// (user released it in the same window the watchdog noticed the death).
+func (b *Broker) handleInstanceEvicted(instanceID, sessionID, reason string) {
+	b.mu.Lock()
+	sess, ok := b.sessions[sessionID]
+	if !ok || !sess.IsActive() {
+		b.mu.Unlock()
+		return
+	}
+	now := time.Now()
+	sess.State = SessionInterrupted
+	sess.ReleasedAt = &now
+	b.mu.Unlock()
+
+	log.Warn().
+		Str("session", sessionID).
+		Str("instance", instanceID).
+		Str("reason", reason).
+		Msg("broker: session interrupted — underlying emulator disappeared")
+
+	if b.capture != nil {
+		b.capture.StopAll(sessionID)
+	}
+	b.appium.Stop(sessionID)
+
+	if b.store != nil {
+		b.store.RecordSession(sess.ID, sess.Profile, sess.Platform, sess.InstanceID, "", sess.Connection.ADBSerial, sess.Connection.Host, sess.Source, "interrupted", b.nodeName, sess.Connection.ADBPort, sess.CreatedAt, sess.ReleasedAt)
+		b.store.RecordEvent("session_interrupted", sess.InstanceID, sess.ID, reason)
+	}
+
+	b.webhook.Send(webhook.Event{
+		Type:       "session.interrupted",
+		SessionID:  sess.ID,
+		InstanceID: sess.InstanceID,
+		Profile:    sess.Profile,
+		Duration:   now.Sub(sess.CreatedAt).String(),
+		NodeName:   b.nodeName,
+	})
 }
 
 // Start begins the broker's background tasks (timeout enforcement, queue draining).

@@ -62,9 +62,18 @@ type Pool struct {
 	// Device scanners (USB auto-discovery)
 	scanners []DeviceScanner
 
-	onReady OnDeviceReady
-	cancel  context.CancelFunc
+	onReady    OnDeviceReady
+	onEvicted  OnInstanceEvicted // fires when the pool drops an instance that was in use
+	cancel     context.CancelFunc
 }
+
+// OnInstanceEvicted fires when an instance disappears from the pool
+// while it had a session attached to it — typically because the user
+// killed the emulator window or the machine went to sleep and ADB
+// lost it. The broker uses this callback to finalize captures and
+// flip the orphaned session to `interrupted` so the dashboard stops
+// claiming "active" forever.
+type OnInstanceEvicted func(instanceID, sessionID string, reason string)
 
 // New creates a new Pool.
 func New(cfg *config.Config, sdk *android.SDK, runner android.CommandRunner) *Pool {
@@ -87,6 +96,11 @@ func New(cfg *config.Config, sdk *android.SDK, runner android.CommandRunner) *Po
 // SetOnReady sets the callback for when a device becomes warm.
 func (p *Pool) SetOnReady(fn OnDeviceReady) {
 	p.onReady = fn
+}
+
+// SetOnInstanceEvicted registers the broker's session-cleanup hook.
+func (p *Pool) SetOnInstanceEvicted(fn OnInstanceEvicted) {
+	p.onEvicted = fn
 }
 
 // RegisterScanner adds a device scanner for auto-discovery.
@@ -420,7 +434,11 @@ func (p *Pool) allocateAny(ctx context.Context, profileName string, includeReser
 	return inst, nil
 }
 
-// Release returns a device to the pool after use.
+// Release returns a device to the pool after use. If the emulator is
+// already gone from ADB (user closed the window, machine went to
+// sleep), skip Reset — it would hang on its own timeouts — and remove
+// the instance outright. The caller still gets a fast ack and the
+// dashboard stops showing "allocated" stale.
 func (p *Pool) Release(ctx context.Context, instanceID string) error {
 	p.mu.RLock()
 	inst, ok := p.instances[instanceID]
@@ -432,15 +450,49 @@ func (p *Pool) Release(ctx context.Context, instanceID string) error {
 
 	log.Info().Str("instance", instanceID).Str("device", inst.Device.DisplayName()).Msg("pool: releasing")
 
+	// Is the emulator even still reachable? A quick adb devices probe
+	// tells us whether to try a real Reset or just evict the corpse.
+	alive := false
+	if inst.Device != nil {
+		serial := inst.Device.Serial()
+		devs, err := p.adb.Devices(context.Background())
+		if err == nil {
+			for _, d := range devs {
+				if d.Serial == serial && d.State == "device" {
+					alive = true
+					break
+				}
+			}
+		}
+	}
+
+	if !alive {
+		log.Warn().Str("instance", instanceID).Msg("pool: release on dead emulator — removing instance instead of resetting")
+		// Clear session so the onEvicted callback (fired by
+		// removeInstance if a session was attached) doesn't double
+		// up with the caller's own release logic. The broker calls
+		// Release explicitly when the user clicks the button, so
+		// we don't need to notify — just clean up the slot.
+		inst.ClearSession()
+		p.removeInstance(instanceID)
+		return nil
+	}
+
 	if err := inst.TransitionTo(StateResetting); err != nil {
 		return err
 	}
 	inst.ClearSession()
 
 	go func() {
-		if err := inst.Device.Reset(ctx); err != nil {
-			log.Error().Err(err).Str("instance", instanceID).Msg("pool: reset failed")
-			_ = inst.TransitionTo(StateError)
+		// Bound Reset so a misbehaving emulator can't leave the
+		// instance stuck in Resetting forever. 30s is generous for
+		// a snapshot-based reset; anything longer is almost
+		// certainly a dead emulator we should evict.
+		resetCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := inst.Device.Reset(resetCtx); err != nil {
+			log.Error().Err(err).Str("instance", instanceID).Msg("pool: reset failed, evicting instance")
+			p.removeInstance(instanceID)
 			return
 		}
 		if err := inst.TransitionTo(StateWarm); err != nil {
@@ -701,19 +753,53 @@ func (p *Pool) destroyInstance(ctx context.Context, inst *DeviceInstance) error 
 }
 
 // removeInstance deletes an instance from the pool's instances map by ID.
+// If the instance had an active session attached, fires onEvicted so the
+// broker can finalize its captures and mark the session interrupted —
+// otherwise the session would hang in "active" forever even though the
+// underlying emulator is gone.
 func (p *Pool) removeInstance(id string) {
+	p.removeInstanceWithReason(id, "")
+}
+
+func (p *Pool) removeInstanceWithReason(id, reason string) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	inst, ok := p.instances[id]
+	var sessionID string
+	if ok && inst != nil {
+		sessionID = inst.SessionID
+	}
 	delete(p.instances, id)
+	p.mu.Unlock()
+
+	// Release the semaphore slot the instance was holding so other
+	// AVDs can boot. Previously slots leaked when an emulator died,
+	// so after a few crashes the pool looked full even with nothing
+	// running.
+	select {
+	case <-p.sem:
+	default:
+	}
+
+	if sessionID != "" && p.onEvicted != nil {
+		go p.onEvicted(id, sessionID, reason)
+	}
 }
 
 // --- Device Watching ---
 
-// watchDevice checks if device is still visible in ADB. Removes if completely gone.
+// watchDevice checks if device is still visible in ADB. Removes if
+// completely gone. Detection target: under a minute from the user
+// closing the emulator window to the dashboard reflecting it. The
+// previous timings (60s grace + 3×30s = 150s floor) were far too
+// loose — users saw "allocated" for 2.5 minutes after their emulator
+// was clearly dead and assumed the dashboard was broken.
 func (p *Pool) watchDevice(inst *DeviceInstance) {
-	time.Sleep(60 * time.Second) // Grace period
+	// Short grace so startup doesn't kill a booting instance that
+	// hasn't finished registering with ADB yet. Emulators usually
+	// take 5–15s to appear via `adb devices`; 20s is plenty.
+	time.Sleep(20 * time.Second)
 
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
 	for range ticker.C {
@@ -729,30 +815,37 @@ func (p *Pool) watchDevice(inst *DeviceInstance) {
 			return
 		}
 
-		// Only check if device is visible in ADB — don't run heavy commands
-		if inst.Device != nil {
-			serial := inst.Device.Serial()
-			devices, err := p.adb.Devices(context.Background())
-			if err != nil {
-				continue // ADB itself failed, don't kill
+		if inst.Device == nil {
+			continue
+		}
+		serial := inst.Device.Serial()
+		devices, err := p.adb.Devices(context.Background())
+		if err != nil {
+			continue // ADB itself failed, don't kill
+		}
+		found := false
+		for _, d := range devices {
+			if d.Serial == serial && d.State == "device" {
+				found = true
+				break
 			}
-			found := false
-			for _, d := range devices {
-				if d.Serial == serial && d.State == "device" {
-					found = true
-					break
-				}
-			}
-			if !found {
-				inst.RecordHealthCheck(false)
-				if inst.HealthFails >= 3 { // 3 consecutive misses (90s)
-					log.Warn().Str("instance", inst.ID).Str("serial", serial).Msg("pool: device gone from ADB, removing")
-					p.removeInstance(inst.ID)
-					return
-				}
-			} else {
-				inst.RecordHealthCheck(true)
-			}
+		}
+		if found {
+			inst.RecordHealthCheck(true)
+			continue
+		}
+		inst.RecordHealthCheck(false)
+		// Two consecutive misses (~20s) is enough to conclude the
+		// emulator is gone. A single miss could be a transient ADB
+		// hiccup; two in a row is real.
+		if inst.HealthFails >= 2 {
+			log.Warn().
+				Str("instance", inst.ID).
+				Str("serial", serial).
+				Str("state", state.String()).
+				Msg("pool: device gone from ADB, removing")
+			p.removeInstanceWithReason(inst.ID, "emulator disappeared from adb")
+			return
 		}
 	}
 }
