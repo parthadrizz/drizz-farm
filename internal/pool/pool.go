@@ -229,16 +229,16 @@ type AllocateOpts struct {
 func (p *Pool) AllocateWith(ctx context.Context, opts AllocateOpts) (*DeviceInstance, error) {
 	manualCaller := opts.Source == "manual" || opts.Source == "dashboard"
 
-	// Specific-device paths fail fast (don't fall through to "any warm")
-	// because the caller explicitly asked for this one.
-	if opts.InstanceID != "" || opts.AVDName != "" {
+	// Specific-device paths fail fast for InstanceID (IDs only exist for
+	// already-tracked instances), but AVDName supports boot-on-demand:
+	// the dashboard's New Session modal lists every AVD known to the
+	// machine, not just warm ones, so picking a cold AVD has to Just
+	// Work instead of erroring "device not available: state=cold".
+	if opts.InstanceID != "" {
 		p.mu.Lock()
 		defer p.mu.Unlock()
 		for _, inst := range p.instances {
-			if opts.InstanceID != "" && inst.ID != opts.InstanceID {
-				continue
-			}
-			if opts.AVDName != "" && (inst.Device == nil || inst.Device.DisplayName() != opts.AVDName) {
+			if inst.ID != opts.InstanceID {
 				continue
 			}
 			state := inst.GetState()
@@ -254,7 +254,61 @@ func (p *Pool) AllocateWith(ctx context.Context, opts AllocateOpts) (*DeviceInst
 			log.Info().Str("instance", inst.ID).Str("device", inst.Device.DisplayName()).Str("source", opts.Source).Msg("pool: allocated (specific)")
 			return inst, nil
 		}
-		return nil, fmt.Errorf("no device matches the specific request (id=%q, avd=%q)", opts.InstanceID, opts.AVDName)
+		return nil, fmt.Errorf("no device with id=%q", opts.InstanceID)
+	}
+
+	if opts.AVDName != "" {
+		// Is this AVD already a tracked instance?
+		p.mu.Lock()
+		for _, inst := range p.instances {
+			if inst.Device == nil || inst.Device.DisplayName() != opts.AVDName {
+				continue
+			}
+			state := inst.GetState()
+			if state == StateWarm {
+				if inst.IsReserved() && !manualCaller {
+					p.mu.Unlock()
+					return nil, fmt.Errorf("device %s is reserved for manual use", inst.ID)
+				}
+				if err := inst.TransitionTo(StateAllocated); err != nil {
+					p.mu.Unlock()
+					return nil, err
+				}
+				p.mu.Unlock()
+				log.Info().Str("instance", inst.ID).Str("avd", opts.AVDName).Str("source", opts.Source).Msg("pool: allocated (specific warm)")
+				return inst, nil
+			}
+			// Tracked but busy — don't boot a second copy, fail clearly.
+			p.mu.Unlock()
+			return nil, fmt.Errorf("AVD %q is currently %s", opts.AVDName, state)
+		}
+		p.mu.Unlock()
+
+		// Not tracked — boot on demand. Acquire a semaphore slot like
+		// allocateAny does so we respect max_concurrent.
+		select {
+		case p.sem <- struct{}{}:
+		default:
+			return nil, ErrPoolExhausted
+		}
+		p.mu.Lock()
+		p.bootingAVDs[opts.AVDName] = true
+		p.mu.Unlock()
+		log.Info().Str("avd", opts.AVDName).Str("source", opts.Source).Msg("pool: booting on-demand (specific)")
+		guessedProfile := guessProfileForAVD(opts.AVDName, p.cfg)
+		inst, err := p.bootEmulator(ctx, opts.AVDName, guessedProfile)
+		p.mu.Lock()
+		delete(p.bootingAVDs, opts.AVDName)
+		p.mu.Unlock()
+		if err != nil {
+			<-p.sem
+			return nil, fmt.Errorf("pool: on-demand boot failed for %s: %w", opts.AVDName, err)
+		}
+		if err := inst.TransitionTo(StateAllocated); err != nil {
+			<-p.sem
+			return nil, err
+		}
+		return inst, nil
 	}
 
 	return p.Allocate(ctx, opts.ProfileName)

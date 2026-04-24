@@ -20,24 +20,81 @@ interface Props {
   onCreated: () => void;
 }
 
+// A selectable row in the device dropdown. Either a live tracked
+// instance (warm / allocated / etc.) or a cold AVD we know about from
+// avdmanager but which isn't booted yet. Picking a cold one boots it
+// on demand (pool.AllocateWith now handles that server-side).
+interface DeviceRow {
+  key: string;            // unique react key + select value
+  label: string;          // human label shown in the option
+  instanceId?: string;    // set when this is a live tracked instance
+  avdName?: string;       // set when the row is an AVD known only by name
+  available: boolean;     // false when warm-but-allocated / busy
+  profile?: string;
+}
+
 export function NewSessionModal({ open, onClose, onCreated }: Props) {
-  const [devices, setDevices] = useState<DeviceInstance[]>([]);
-  const [selectedDevice, setSelectedDevice] = useState<string>(''); // '' = any (by profile)
+  const [rows, setRows] = useState<DeviceRow[]>([]);
+  const [selectedKey, setSelectedKey] = useState<string>('');
   const [profile, setProfile] = useState<string>('');
   const [timeoutMin, setTimeoutMin] = useState(60);
   const [recordVideo, setRecordVideo] = useState(true);
   const [captureLogcat, setCaptureLogcat] = useState(true);
   const [captureScreenshots, setCaptureScreenshots] = useState(true);
   const [captureNetwork, setCaptureNetwork] = useState(false);
-  const [retentionHours, setRetentionHours] = useState(0); // 0 = daemon default
+  const [retentionHours, setRetentionHours] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!open) return;
-    api.poolDevices({ free: true })
-      .then(d => setDevices(d.devices || []))
-      .catch(() => setDevices([]));
+    setLoading(true);
+    setError('');
+    // Fetch live instances + all known AVDs and merge. Without the
+    // discovery call, the dropdown was empty until you'd already
+    // booted an emulator somewhere else first — chicken-and-egg
+    // nonsense for first-time users.
+    Promise.all([
+      api.poolDevices().catch(() => ({ devices: [] as DeviceInstance[] })),
+      api.avds().catch(() => ({ avds: [] as { name: string; display_name?: string }[] })),
+    ]).then(([poolResp, avdsResp]) => {
+      const instances = poolResp.devices || [];
+      const avds = avdsResp.avds || [];
+      const merged: DeviceRow[] = [];
+      const seenAVDs = new Set<string>();
+
+      // Live instances first (they're cheaper — already booted).
+      for (const inst of instances) {
+        const avdName = inst.device_name;
+        if (avdName) seenAVDs.add(avdName);
+        const busy = inst.state !== 'warm';
+        merged.push({
+          key: `inst:${inst.id}`,
+          label: `${avdName || inst.id} · ${inst.state}${inst.reserved ? ' · reserved' : ''}`,
+          instanceId: inst.id,
+          avdName,
+          available: inst.state === 'warm' && (!inst.reserved || true),
+          profile: inst.profile,
+        });
+        void busy;
+      }
+      // Then cold AVDs that aren't already tracked.
+      for (const avd of avds) {
+        if (seenAVDs.has(avd.name)) continue;
+        merged.push({
+          key: `avd:${avd.name}`,
+          label: `${avd.display_name || avd.name} · cold (will boot)`,
+          avdName: avd.name,
+          available: true,
+        });
+      }
+      setRows(merged);
+      // Pre-select the first available device so Create works on first click.
+      const firstAvailable = merged.find(r => r.available);
+      if (firstAvailable) setSelectedKey(firstAvailable.key);
+      setLoading(false);
+    });
   }, [open]);
 
   if (!open) return null;
@@ -56,8 +113,11 @@ export function NewSessionModal({ open, onClose, onCreated }: Props) {
         ...(retentionHours > 0 ? { retention_hours: retentionHours } : {}),
       },
     };
-    if (selectedDevice) {
-      body.device_id = selectedDevice;
+    const row = rows.find(r => r.key === selectedKey);
+    if (row?.instanceId) {
+      body.device_id = row.instanceId;
+    } else if (row?.avdName) {
+      body.avd_name = row.avdName;
     } else if (profile) {
       body.profile = profile;
     } else {
@@ -83,7 +143,7 @@ export function NewSessionModal({ open, onClose, onCreated }: Props) {
     }
   };
 
-  const profiles = Array.from(new Set(devices.map(d => d.profile).filter(Boolean)));
+  const profiles = Array.from(new Set(rows.map(r => r.profile).filter(Boolean))) as string[];
 
   return (
     <div
@@ -103,27 +163,35 @@ export function NewSessionModal({ open, onClose, onCreated }: Props) {
         </div>
 
         <div className="space-y-4">
-          {/* Device picker */}
+          {/* Device picker — shows every known AVD, warm or cold. */}
           <div>
             <label className="text-xs text-muted-foreground block mb-1.5">Device</label>
-            <select
-              value={selectedDevice}
-              onChange={e => { setSelectedDevice(e.target.value); if (e.target.value) setProfile(''); }}
-              className="w-full surface-2 border border-border rounded-lg px-3 py-2 text-sm text-foreground"
-            >
-              <option value="">— any matching profile —</option>
-              {devices.map(d => (
-                <option key={d.id} value={d.id}>
-                  {d.device_name} ({d.profile}) · {d.state}{d.reserved ? ' · reserved' : ''}
-                </option>
-              ))}
-            </select>
+            {loading ? (
+              <div className="text-xs text-muted-foreground">Loading devices…</div>
+            ) : rows.length === 0 ? (
+              <div className="text-xs text-muted-foreground">
+                No AVDs found on this machine. Create one from the Dashboard → Add button first.
+              </div>
+            ) : (
+              <select
+                value={selectedKey}
+                onChange={e => { setSelectedKey(e.target.value); if (e.target.value) setProfile(''); }}
+                className="w-full surface-2 border border-border rounded-lg px-3 py-2 text-sm text-foreground"
+              >
+                <option value="">— match by profile below —</option>
+                {rows.map(r => (
+                  <option key={r.key} value={r.key} disabled={!r.available}>
+                    {r.label}
+                  </option>
+                ))}
+              </select>
+            )}
             <p className="text-[11px] text-muted-foreground mt-1">
-              Pick a specific one, or leave blank to match by profile below.
+              Cold AVDs will be booted automatically. Picking a warm one is instant.
             </p>
           </div>
 
-          {!selectedDevice && (
+          {!selectedKey && profiles.length > 0 && (
             <div>
               <label className="text-xs text-muted-foreground block mb-1.5">Profile</label>
               <select
