@@ -51,11 +51,18 @@ interface TimelineResponse {
   total: number;
 }
 
+// Tab keys for the event pane. 'all' merges every type; the named
+// tabs show just that source. Simpler than the previous grid of
+// toggle-chips — one click per view, always obvious what's selected.
+type TabKey = 'all' | 'lifecycle' | 'logcat' | 'network' | 'screenshot';
+
 export function Playback() {
   const { id: sessionID } = useParams<{ id: string }>();
   const [data, setData] = useState<TimelineResponse | null>(null);
   const [error, setError] = useState('');
-  const [filter, setFilter] = useState<Set<string>>(new Set(['lifecycle', 'logcat', 'network', 'screenshot']));
+  const [tab, setTab] = useState<TabKey>('all');
+  // Level filter stays as a chip row — orthogonal to the tab (you
+  // might want "only errors across all types" or "only errors in logcat").
   const [levelFilter, setLevelFilter] = useState<Set<string>>(new Set(['info', 'warn', 'error']));
   const [now, setNow] = useState(0); // current video time in seconds
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -98,15 +105,28 @@ export function Playback() {
     return () => cancelAnimationFrame(raf);
   }, [data?.video_url]);
 
+  // Counts per tab — rendered as badges on each tab so the user can
+  // see at a glance whether a stream has anything in it before
+  // clicking. Zero counts are common (no network HAR, no screenshots).
+  const counts = useMemo(() => {
+    const c = { all: 0, lifecycle: 0, logcat: 0, network: 0, screenshot: 0 } as Record<TabKey, number>;
+    if (!data) return c;
+    for (const e of data.events) {
+      c.all++;
+      if (e.type in c) c[e.type as TabKey]++;
+    }
+    return c;
+  }, [data]);
+
   const events = useMemo(() => {
     if (!data) return [];
     return data.events.filter((e) => {
-      if (!filter.has(e.type)) return false;
+      if (tab !== 'all' && e.type !== tab) return false;
       const lvl = e.level || 'info';
       if (!levelFilter.has(lvl)) return false;
       return true;
     });
-  }, [data, filter, levelFilter]);
+  }, [data, tab, levelFilter]);
 
   const duration = useMemo(() => {
     if (!events.length) return 60;
@@ -181,7 +201,8 @@ export function Playback() {
 
         {/* Event list */}
         <div className="col-span-1">
-          <FilterChips filter={filter} setFilter={setFilter} levelFilter={levelFilter} setLevelFilter={setLevelFilter} />
+          <Tabs tab={tab} setTab={setTab} counts={counts} />
+          <LevelChips levelFilter={levelFilter} setLevelFilter={setLevelFilter} />
           <div className="section-card max-h-[640px] overflow-auto divide-y divide-border/50">
             {events.map((e, i) => {
               const nextTs = events[i + 1]?.relative_s ?? duration;
@@ -261,57 +282,88 @@ function TimelineBar({
   );
 }
 
-/* ---- Filter chips -------------------------------------------- */
+/* ---- Tabs (event type) --------------------------------------- */
 
-function FilterChips({
-  filter, setFilter, levelFilter, setLevelFilter,
+// One tab per event source + an "All" tab that merges everything.
+// Each tab shows its count so zero-event streams are obvious without
+// clicking. The active tab gets a filled primary background so you
+// can always tell which view you're on.
+function Tabs({
+  tab, setTab, counts,
 }: {
-  filter: Set<string>; setFilter: (s: Set<string>) => void;
+  tab: TabKey; setTab: (t: TabKey) => void; counts: Record<TabKey, number>;
+}) {
+  const items: { key: TabKey; label: string }[] = [
+    { key: 'all',        label: 'All' },
+    { key: 'lifecycle',  label: 'Lifecycle' },
+    { key: 'logcat',     label: 'Logcat' },
+    { key: 'network',    label: 'Network' },
+    { key: 'screenshot', label: 'Screenshots' },
+  ];
+  return (
+    <div className="flex items-center gap-1 mb-2 border-b border-border overflow-x-auto">
+      {items.map(({ key, label }) => {
+        const active = tab === key;
+        const n = counts[key];
+        return (
+          <button
+            key={key}
+            onClick={() => setTab(key)}
+            aria-pressed={active}
+            className={`px-3 py-1.5 text-xs whitespace-nowrap border-b-2 -mb-px transition inline-flex items-center gap-1.5 ${
+              active
+                ? 'border-primary text-foreground font-medium'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            {label}
+            <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${
+              active ? 'bg-primary/20 text-primary' : 'bg-surface-2 text-muted-foreground/70'
+            }`}>{n}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ---- Level chips (orthogonal to tabs) ------------------------ */
+
+function LevelChips({
+  levelFilter, setLevelFilter,
+}: {
   levelFilter: Set<string>; setLevelFilter: (s: Set<string>) => void;
 }) {
-  const toggle = (s: Set<string>, setter: (s: Set<string>) => void, key: string) => {
-    const next = new Set(s);
+  const toggle = (key: string) => {
+    const next = new Set(levelFilter);
     next.has(key) ? next.delete(key) : next.add(key);
-    setter(next);
+    setLevelFilter(next);
   };
-  // Chips are click-to-filter toggles: active = this kind shows, inactive
-  // = hidden. Used to render indistinguishable surface-2/3 tones that
-  // made it impossible to tell which were selected. Now active chips
-  // get a primary-colored border + filled background; inactive ones
-  // are muted with a clear "hidden" look. A small checkmark reinforces
-  // state for anyone who can't perceive the color difference.
-  const chip = (active: boolean, label: string, onClick: () => void) => (
-    <button
-      onClick={onClick}
-      aria-pressed={active}
-      title={active ? `Hide ${label}` : `Show ${label}`}
-      className={`px-2.5 py-1 rounded-md text-[11px] border transition inline-flex items-center gap-1 ${
-        active
-          ? 'border-primary bg-primary/15 text-foreground'
-          : 'border-border bg-transparent text-muted-foreground/60 line-through opacity-60 hover:opacity-100 hover:text-foreground'
-      }`}
-    >
-      {active && <span className="text-primary">✓</span>}
-      {label}
-    </button>
-  );
+  const chip = (key: 'info' | 'warn' | 'error') => {
+    const active = levelFilter.has(key);
+    const color = key === 'error' ? 'hsl(var(--destructive))'
+                : key === 'warn'  ? '#d97706'
+                : 'hsl(var(--muted-foreground))';
+    return (
+      <button
+        onClick={() => toggle(key)}
+        aria-pressed={active}
+        title={active ? `Hide ${key}` : `Show ${key}`}
+        className={`px-2 py-0.5 rounded-md text-[11px] border transition inline-flex items-center gap-1 ${
+          active ? 'border-border bg-surface-2 text-foreground' : 'border-border/50 text-muted-foreground/50 line-through'
+        }`}
+      >
+        <span className="w-1.5 h-1.5 rounded-full" style={{ background: active ? color : 'currentColor', opacity: active ? 1 : 0.4 }} />
+        {key}
+      </button>
+    );
+  };
   return (
-    <div className="mb-3">
-      <div className="text-[11px] text-muted-foreground mb-1.5">
-        Click to toggle — active filters have a colored border; crossed-out ones are hidden.
-      </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-[10px] uppercase tracking-wider text-muted-foreground/70 mr-1">Type</span>
-        {chip(filter.has('lifecycle'), 'lifecycle', () => toggle(filter, setFilter, 'lifecycle'))}
-        {chip(filter.has('logcat'), 'logcat', () => toggle(filter, setFilter, 'logcat'))}
-        {chip(filter.has('network'), 'network', () => toggle(filter, setFilter, 'network'))}
-        {chip(filter.has('screenshot'), 'screenshot', () => toggle(filter, setFilter, 'screenshot'))}
-        <span className="mx-2 text-muted-foreground/30">│</span>
-        <span className="text-[10px] uppercase tracking-wider text-muted-foreground/70 mr-1">Level</span>
-        {chip(levelFilter.has('info'), 'info', () => toggle(levelFilter, setLevelFilter, 'info'))}
-        {chip(levelFilter.has('warn'), 'warn', () => toggle(levelFilter, setLevelFilter, 'warn'))}
-        {chip(levelFilter.has('error'), 'error', () => toggle(levelFilter, setLevelFilter, 'error'))}
-      </div>
+    <div className="flex items-center gap-1.5 mb-2 pl-1 text-[11px]">
+      <span className="text-muted-foreground/70 mr-1">Level:</span>
+      {chip('info')}
+      {chip('warn')}
+      {chip('error')}
     </div>
   );
 }
