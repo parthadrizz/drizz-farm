@@ -84,6 +84,21 @@ func NewService(adbPath, dataDir string) *Service {
 	}
 }
 
+// logEvent appends a line to the session's capture.log so a user
+// looking at "why is my video missing" can open one file and see what
+// happened without needing to tail the daemon stdout. Cheap, crash-safe,
+// appears automatically in the artifacts listing.
+func (s *Service) logEvent(sessionID, format string, args ...any) {
+	dir := filepath.Join(s.dataDir, "artifacts", sessionID)
+	_ = os.MkdirAll(dir, 0755)
+	f, err := os.OpenFile(filepath.Join(dir, "capture.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	fmt.Fprintf(f, "%s %s\n", time.Now().UTC().Format(time.RFC3339Nano), fmt.Sprintf(format, args...))
+}
+
 // ArtifactsDir returns the directory where a session's artifacts live.
 // Created lazily.
 func (s *Service) ArtifactsDir(sessionID string) string {
@@ -124,6 +139,7 @@ func (s *Service) StartVideo(sessionID, serial string) error {
 
 	go s.videoChunkLoop(ctx, vc, dir)
 	log.Info().Str("session", sessionID).Str("serial", serial).Msg("capture: video started (chunked)")
+	s.logEvent(sessionID, "video.start serial=%s", serial)
 	return nil
 }
 
@@ -148,8 +164,10 @@ func (s *Service) videoChunkLoop(ctx context.Context, vc *videoCapture, dir stri
 			"screenrecord", "--time-limit", "180", devicePath)
 		if err := cmd.Start(); err != nil {
 			log.Warn().Err(err).Str("session", vc.sessionID).Int("chunk", idx).Msg("capture: chunk start failed")
+			s.logEvent(vc.sessionID, "video.chunk_start_failed idx=%d err=%v", idx, err)
 			return
 		}
+		s.logEvent(vc.sessionID, "video.chunk_started idx=%d device_path=%s", idx, devicePath)
 
 		// Wait for the chunk to finish OR the loop to be cancelled.
 		waitCh := make(chan error, 1)
@@ -187,15 +205,24 @@ func (s *Service) videoChunkLoop(ctx context.Context, vc *videoCapture, dir stri
 		rmCancel()
 
 		if pullErr == nil {
+			fi, _ := os.Stat(localPath)
+			var size int64
+			if fi != nil {
+				size = fi.Size()
+			}
 			vc.mu.Lock()
 			vc.chunks = append(vc.chunks, localPath)
 			vc.mu.Unlock()
+			s.logEvent(vc.sessionID, "video.chunk_pulled idx=%d size=%d", idx, size)
 		} else if _, err := os.Stat(localPath); err == nil {
 			// Pull reported an error but we got something locally.
 			// Keep it — partial is useful.
 			vc.mu.Lock()
 			vc.chunks = append(vc.chunks, localPath)
 			vc.mu.Unlock()
+			s.logEvent(vc.sessionID, "video.chunk_partial idx=%d pull_err=%v", idx, pullErr)
+		} else {
+			s.logEvent(vc.sessionID, "video.chunk_pull_failed idx=%d err=%v", idx, pullErr)
 		}
 
 		if ctx.Err() != nil {
@@ -230,8 +257,10 @@ func (s *Service) StopVideo(sessionID string) string {
 
 	if len(chunks) == 0 {
 		log.Warn().Str("session", sessionID).Msg("capture: video stopped with no chunks captured")
+		s.logEvent(sessionID, "video.stop_no_chunks serial=%s duration=%s", vc.serial, time.Since(vc.startedAt))
 		return ""
 	}
+	s.logEvent(sessionID, "video.stop chunks=%d", len(chunks))
 	if len(chunks) == 1 {
 		// Single chunk — just rename to the canonical filename so the
 		// unified artifacts endpoint exposes it as "video.mp4".

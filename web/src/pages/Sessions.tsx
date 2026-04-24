@@ -69,9 +69,18 @@ export function Sessions() {
     return `${m}m ${s}s`;
   };
 
+  // Sessions list spans multiple days once you've been running for a
+  // while — showing only the clock time ("2:55:44 PM") made it
+  // impossible to tell yesterday's run from today's. Render as "Apr 24,
+  // 14:55" — locale-aware date + 24h time — so both are unambiguous.
   const formatTime = (ts: string) => {
     if (!ts) return '-';
-    try { return new Date(ts).toLocaleTimeString(); } catch { return ts; }
+    try {
+      const d = new Date(ts);
+      const date = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+      const time = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
+      return `${date}, ${time}`;
+    } catch { return ts; }
   };
 
   return (
