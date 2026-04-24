@@ -401,7 +401,12 @@ export function CreateWizard({ isModal, onClose }: { isModal?: boolean; onClose?
         <div className="text-center py-16">
           <div className="text-4xl mb-4">✓</div>
           <div className="text-foreground text-lg font-semibold">{createResult.created} emulator{createResult.created > 1 ? 's' : ''} created</div>
-          {createResult.errors.length > 0 && (
+          {/* Backend returns `errors: null` when there are none (Go's
+              zero-value for a nil slice encodes as null). A bare
+              `.length` on null threw, unmounted the component, and
+              React Router sent the user back to "/". Treat null/
+              undefined as empty. */}
+          {createResult.errors && createResult.errors.length > 0 && (
             <div className="mt-3 text-sm text-destructive">{createResult.errors.join(', ')}</div>
           )}
           <button onClick={() => { if (onClose) onClose(); else setStep('device'); }}

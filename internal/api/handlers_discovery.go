@@ -284,7 +284,10 @@ func (h *discoveryHandlers) CreateAVDs(w http.ResponseWriter, r *http.Request) {
 
 	avdMgr := android.NewAVDManager(h.sdk, h.runner)
 	created := 0
-	var errors []string
+	// Initialize as [] so the response is `errors: []` instead of
+	// `errors: null` when nothing failed. Clients that do
+	// `resp.errors.length` otherwise crash on null.
+	errors := []string{}
 
 	for i := 0; i < req.Count; i++ {
 		name := android.AVDName(req.ProfileName, i)
