@@ -176,7 +176,7 @@ export function Sessions() {
                 </div>
               )}
 
-              <ArtifactsPanel sessionID={s.id} />
+              <ArtifactsPanel sessionID={s.id} autoExpand={s.state === 'active'} />
 
               {/* Playback link — only meaningful once the session
                   has finished, because the video.mp4 finalizes on
@@ -201,40 +201,62 @@ export function Sessions() {
   );
 }
 
-// ArtifactsPanel fetches the unified /sessions/{id}/artifacts list and
-// renders a single row of download chips per captured artifact. Lazy-
-// loaded so the session list doesn't make N calls on every render; we
-// only fetch when the component mounts. Refreshes once per minute so
-// long-running sessions show new chunks as they land.
-function ArtifactsPanel({ sessionID }: { sessionID: string }) {
+// ArtifactsPanel lazy-loads the unified /sessions/{id}/artifacts list
+// on demand. Previously this fetched on mount for every row, so a
+// page with 160 sessions in history hammered the daemon with 160
+// artifact requests per render — one slow machine noticeably slowed
+// the UI. Now a single "Artifacts" button fires one fetch when the
+// user expands the row. Active sessions auto-expand so you can see
+// in-progress captures land.
+function ArtifactsPanel({ sessionID, autoExpand }: { sessionID: string; autoExpand?: boolean }) {
   const [data, setData] = useState<{ capabilities?: any; artifacts: ArtifactRow[] } | null>(null);
+  const [expanded, setExpanded] = useState<boolean>(!!autoExpand);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
+    if (!expanded) return;
     let cancelled = false;
     const load = () => {
+      setLoading(true);
       fetch(`/api/v1/sessions/${sessionID}/artifacts`)
         .then(r => r.ok ? r.json() : null)
-        .then(d => { if (!cancelled) setData(d); })
-        .catch(() => {});
+        .then(d => { if (!cancelled) { setData(d); setLoading(false); } })
+        .catch(() => { if (!cancelled) setLoading(false); });
     };
     load();
-    const i = setInterval(load, 60_000);
-    return () => { cancelled = true; clearInterval(i); };
-  }, [sessionID]);
+    // Only poll for active (auto-expanded) sessions — released ones
+    // don't need revalidation every minute.
+    if (autoExpand) {
+      const i = setInterval(load, 60_000);
+      return () => { cancelled = true; clearInterval(i); };
+    }
+    return () => { cancelled = true; };
+  }, [sessionID, expanded, autoExpand]);
 
+  if (!expanded) {
+    return (
+      <button
+        onClick={() => setExpanded(true)}
+        className="mt-2 ml-7 text-[11px] text-muted-foreground hover:text-primary"
+      >
+        ▸ Artifacts
+      </button>
+    );
+  }
+
+  if (loading && !data) {
+    return <div className="mt-2 ml-7 text-[11px] text-muted-foreground">Loading artifacts…</div>;
+  }
   if (!data) return null;
+
   const arts = data.artifacts || [];
   if (arts.length === 0) {
-    // Distinguish "nothing captured because nothing was asked for"
-    // from "requested but still empty."
     const caps = data.capabilities;
     const asked = caps && (caps.record_video || caps.capture_logcat || caps.capture_screenshots || caps.capture_network);
-    if (!asked) return null;
-    return (
-      <div className="mt-2 ml-7 text-[11px] text-muted-foreground">
-        Artifacts requested but not yet available.
-      </div>
-    );
+    if (!asked) {
+      return <div className="mt-2 ml-7 text-[11px] text-muted-foreground">No captures requested for this session.</div>;
+    }
+    return <div className="mt-2 ml-7 text-[11px] text-muted-foreground">Artifacts requested but not yet available.</div>;
   }
   return (
     <div className="mt-2 ml-7 flex items-center gap-2 flex-wrap">
