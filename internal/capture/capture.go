@@ -150,12 +150,20 @@ func (s *Service) StartVideo(sessionID, serial string) error {
 func (s *Service) videoChunkLoop(ctx context.Context, vc *videoCapture, dir string) {
 	defer close(vc.done)
 	idx := 0
+	// When chunks fail rapidly in sequence, the emulator is probably
+	// gone — the previous version of this loop spun forever in that
+	// state, spamming 100 KB+ of capture.log with pull failures. Any
+	// chunk that both starts AND ends inside this threshold is a sign
+	// adb is returning immediately; two in a row and we bail.
+	const rapidFailThreshold = 2 * time.Second
+	rapidFailures := 0
 	for {
 		if ctx.Err() != nil {
 			return
 		}
 		devicePath := fmt.Sprintf("/sdcard/drizz_%s_%03d.mp4", vc.sessionID, idx)
 		localPath := filepath.Join(dir, fmt.Sprintf("video_%03d.mp4", idx))
+		chunkStart := time.Now()
 
 		// Each screenrecord invocation runs up to 180s. We pass
 		// the chunk context (cancelled with the loop) but also rely
@@ -214,15 +222,31 @@ func (s *Service) videoChunkLoop(ctx context.Context, vc *videoCapture, dir stri
 			vc.chunks = append(vc.chunks, localPath)
 			vc.mu.Unlock()
 			s.logEvent(vc.sessionID, "video.chunk_pulled idx=%d size=%d", idx, size)
-		} else if _, err := os.Stat(localPath); err == nil {
+			rapidFailures = 0
+		} else if fi, err := os.Stat(localPath); err == nil && fi.Size() > 0 {
 			// Pull reported an error but we got something locally.
 			// Keep it — partial is useful.
 			vc.mu.Lock()
 			vc.chunks = append(vc.chunks, localPath)
 			vc.mu.Unlock()
-			s.logEvent(vc.sessionID, "video.chunk_partial idx=%d pull_err=%v", idx, pullErr)
+			s.logEvent(vc.sessionID, "video.chunk_partial idx=%d size=%d pull_err=%v", idx, fi.Size(), pullErr)
+			rapidFailures = 0
 		} else {
 			s.logEvent(vc.sessionID, "video.chunk_pull_failed idx=%d err=%v", idx, pullErr)
+			// Fast-fail circuit breaker: if the whole chunk cycle
+			// (screenrecord + pull attempt) completed in under 2s,
+			// adb is returning immediately — the emulator is gone.
+			// Two in a row = bail and let StopVideo/eviction finalize.
+			if time.Since(chunkStart) < rapidFailThreshold {
+				rapidFailures++
+				if rapidFailures >= 2 {
+					log.Warn().Str("session", vc.sessionID).Int("idx", idx).Msg("capture: chunk loop exiting — emulator appears gone")
+					s.logEvent(vc.sessionID, "video.loop_abort idx=%d reason=rapid_failures", idx)
+					return
+				}
+			} else {
+				rapidFailures = 0
+			}
 		}
 
 		if ctx.Err() != nil {
