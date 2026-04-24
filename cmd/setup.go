@@ -62,6 +62,7 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	fmt.Println()
 	fmt.Println("  Checking prerequisites...")
 	fmt.Println()
+	hw := computeHardwareRecommendation()
 	printHardwareCapacity()
 	fmt.Println()
 
@@ -72,8 +73,17 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		fmt.Println("\n  ✓ All prerequisites installed")
 	}
 
+	// --- Step 2.5: Confirm concurrent-emulator slot count ---
+	// RAM is the actual bottleneck (~2.5 GB resident per running
+	// emulator), so we show the computed recommendation and let the
+	// user override if they know their workload. Silent auto-pick
+	// was landing people on max_concurrent=1 without realizing it
+	// was a soft cap — then they'd try to boot a second AVD and see
+	// "no capacity" with no hint why.
+	maxConcurrent := promptMaxConcurrent(reader, hw)
+
 	// --- Step 3: Save Config ---
-	if err := saveSetupConfig(meshName, meshKey); err != nil {
+	if err := saveSetupConfig(meshName, meshKey, maxConcurrent); err != nil {
 		return fmt.Errorf("failed to save config: %w", err)
 	}
 	fmt.Println("  ✓ Config saved")
@@ -437,7 +447,34 @@ func generateMeshKey() string {
 	return hex.EncodeToString(b)
 }
 
-func saveSetupConfig(meshName, meshKey string) error {
+// promptMaxConcurrent asks the user to confirm or override the RAM-aware
+// recommendation. Empty input (just Enter) accepts the default. The
+// answer is echoed back so it's obvious what got written to config.
+func promptMaxConcurrent(reader *bufio.Reader, hw hardwareRecommendation) int {
+	fmt.Println()
+	fmt.Printf("  How many emulators should run concurrently on this machine?\n")
+	fmt.Printf("  Recommended: %d  (RAM cap: %d, CPU cap: %d)\n", hw.Recommended, hw.MaxByRAM, hw.MaxByCPU)
+	fmt.Printf("  Each emulator uses ~2.5 GB RAM. You can change this later in\n")
+	fmt.Printf("  ~/.drizz-farm/config.yaml (pool.max_concurrent) or the Settings page.\n")
+	for {
+		fmt.Printf("  [%d]: ", hw.Recommended)
+		line, _ := reader.ReadString('\n')
+		line = strings.TrimSpace(line)
+		if line == "" {
+			return hw.Recommended
+		}
+		var n int
+		if _, err := fmt.Sscanf(line, "%d", &n); err == nil && n >= 1 && n <= 64 {
+			if n > hw.Recommended {
+				fmt.Printf("    ⚠ %d exceeds what this machine can run safely (recommended %d). Using your override.\n", n, hw.Recommended)
+			}
+			return n
+		}
+		fmt.Println("    Enter a number between 1 and 64.")
+	}
+}
+
+func saveSetupConfig(meshName, meshKey string, maxConcurrent int) error {
 	home, _ := os.UserHomeDir()
 	dataDir := filepath.Join(home, ".drizz-farm")
 	os.MkdirAll(dataDir, 0755)
@@ -493,18 +530,15 @@ func saveSetupConfig(meshName, meshKey string) error {
 		}
 	}
 
-	// Apply defaults for empty fields
-	if cfg.Pool.MaxConcurrent == 0 {
-		// Auto-detect based on hardware
-		cpus := runtime.NumCPU()
-		maxByCPU := cpus / 2
-		if maxByCPU < 1 {
-			maxByCPU = 1
-		}
-		if maxByCPU > 6 {
-			maxByCPU = 6
-		}
-		cfg.Pool.MaxConcurrent = maxByCPU
+	// The setup wizard always passes an explicit maxConcurrent chosen
+	// against the hardware recommendation. Honor it. Only fall back to
+	// the CPU-only heuristic if someone calls saveSetupConfig with 0
+	// (defensive — shouldn't happen through the wizard).
+	if maxConcurrent > 0 {
+		cfg.Pool.MaxConcurrent = maxConcurrent
+	} else if cfg.Pool.MaxConcurrent == 0 {
+		hw := computeHardwareRecommendation()
+		cfg.Pool.MaxConcurrent = hw.Recommended
 	}
 	if cfg.API.Port == 0 {
 		cfg.API.Port = 9401
@@ -1074,57 +1108,71 @@ func checkXcodeCLI() checkResult {
 	return r
 }
 
-func printHardwareCapacity() {
-	cpus := runtime.NumCPU()
-	totalRAMGB := 0
+// hardwareRecommendation samples CPU/RAM/disk and returns the numbers we
+// want both the printed summary and the auto-config to agree on. RAM is
+// the real bottleneck (each emulator eats ~2.5 GB resident), so the
+// recommendation is min(RAM-based, CPU-based), capped at 12.
+type hardwareRecommendation struct {
+	TotalRAMGB  int
+	CPUs        int
+	FreeDiskGB  int
+	MaxByRAM    int
+	MaxByCPU    int
+	Recommended int
+}
+
+func computeHardwareRecommendation() hardwareRecommendation {
+	h := hardwareRecommendation{CPUs: runtime.NumCPU()}
 	if runtime.GOOS == "darwin" {
-		out, err := exec.Command("sysctl", "-n", "hw.memsize").CombinedOutput()
-		if err == nil {
+		if out, err := exec.Command("sysctl", "-n", "hw.memsize").CombinedOutput(); err == nil {
 			var memBytes int64
 			fmt.Sscanf(strings.TrimSpace(string(out)), "%d", &memBytes)
-			totalRAMGB = int(memBytes / (1024 * 1024 * 1024))
+			h.TotalRAMGB = int(memBytes / (1024 * 1024 * 1024))
 		}
-	}
-	freeDiskGB := 0
-	if runtime.GOOS == "darwin" {
-		out, err := exec.Command("df", "-g", "/").CombinedOutput()
-		if err == nil {
+		if out, err := exec.Command("df", "-g", "/").CombinedOutput(); err == nil {
 			lines := strings.Split(string(out), "\n")
 			if len(lines) > 1 {
 				fields := strings.Fields(lines[1])
 				if len(fields) > 3 {
-					fmt.Sscanf(fields[3], "%d", &freeDiskGB)
+					fmt.Sscanf(fields[3], "%d", &h.FreeDiskGB)
 				}
 			}
 		}
 	}
-
-	usableRAM := totalRAMGB - 4
+	// Leave 4 GB for OS + daemon + dashboard, budget 2.5 GB/emulator.
+	usableRAM := h.TotalRAMGB - 4
 	if usableRAM < 0 {
 		usableRAM = 0
 	}
-	maxByRAM := usableRAM * 1000 / 2500
-	maxByCPU := cpus / 2
-	if maxByCPU < 1 {
-		maxByCPU = 1
+	h.MaxByRAM = usableRAM * 1000 / 2500
+	h.MaxByCPU = h.CPUs / 2
+	if h.MaxByCPU < 1 {
+		h.MaxByCPU = 1
 	}
-	recommended := maxByRAM
-	if maxByCPU < recommended {
-		recommended = maxByCPU
+	h.Recommended = h.MaxByRAM
+	if h.MaxByCPU < h.Recommended {
+		h.Recommended = h.MaxByCPU
 	}
-	if recommended > 12 {
-		recommended = 12
+	if h.Recommended < 1 {
+		h.Recommended = 1
 	}
+	if h.Recommended > 12 {
+		h.Recommended = 12
+	}
+	return h
+}
 
+func printHardwareCapacity() {
+	h := computeHardwareRecommendation()
 	fmt.Println("  Hardware:")
-	if totalRAMGB > 0 {
-		fmt.Printf("    RAM:          %d GB (~%d emulators)\n", totalRAMGB, maxByRAM)
+	if h.TotalRAMGB > 0 {
+		fmt.Printf("    RAM:          %d GB (~%d emulators)\n", h.TotalRAMGB, h.MaxByRAM)
 	}
-	fmt.Printf("    CPUs:         %d cores (~%d emulators)\n", cpus, maxByCPU)
-	if freeDiskGB > 0 {
-		fmt.Printf("    Disk free:    %d GB (~%d AVDs)\n", freeDiskGB, freeDiskGB/5)
+	fmt.Printf("    CPUs:         %d cores (~%d emulators)\n", h.CPUs, h.MaxByCPU)
+	if h.FreeDiskGB > 0 {
+		fmt.Printf("    Disk free:    %d GB (~%d AVDs)\n", h.FreeDiskGB, h.FreeDiskGB/5)
 	}
-	fmt.Printf("    Recommended:  %d concurrent emulators\n", recommended)
+	fmt.Printf("    Recommended:  %d concurrent emulators\n", h.Recommended)
 }
 
 func findAndroidSDK() string {
