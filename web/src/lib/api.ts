@@ -66,10 +66,13 @@ export interface Session {
   profile: string;
   platform: string;
   instance_id: string;
+  device_name?: string; // AVD display name — set on allocation
   state: string;
   connection: ConnectionInfo;
   created_at: string;
   expires_at: string;
+  released_at?: string;
+  source?: string;
 }
 
 export interface NodeHealth {

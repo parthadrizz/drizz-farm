@@ -61,6 +61,11 @@ type Session struct {
 	Profile     string       `json:"profile"`
 	Platform    string       `json:"platform"` // "android" or "ios"
 	InstanceID  string       `json:"instance_id"`
+	// DeviceName is the human-readable AVD / device name (e.g.
+	// "Pixel_7_API_34"), captured at allocation time. Sessions list
+	// shows this instead of the opaque emulator-5554 serial so users
+	// can tell their runs apart at a glance.
+	DeviceName  string       `json:"device_name,omitempty"`
 	State       SessionState `json:"state"`
 	Connection  ConnectionInfo `json:"connection"`
 	ClientID    string       `json:"client_id,omitempty"`

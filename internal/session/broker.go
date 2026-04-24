@@ -134,7 +134,7 @@ func (b *Broker) handleInstanceEvicted(instanceID, sessionID, reason string) {
 	b.appium.Stop(sessionID)
 
 	if b.store != nil {
-		b.store.RecordSession(sess.ID, sess.Profile, sess.Platform, sess.InstanceID, "", sess.Connection.ADBSerial, sess.Connection.Host, sess.Source, "interrupted", b.nodeName, sess.Connection.ADBPort, sess.CreatedAt, sess.ReleasedAt)
+		b.store.RecordSession(sess.ID, sess.Profile, sess.Platform, sess.InstanceID, sess.DeviceName, sess.Connection.ADBSerial, sess.Connection.Host, sess.Source, "interrupted", b.nodeName, sess.Connection.ADBPort, sess.CreatedAt, sess.ReleasedAt)
 		b.store.RecordEvent("session_interrupted", sess.InstanceID, sess.ID, reason)
 	}
 
@@ -263,7 +263,7 @@ func (b *Broker) Release(ctx context.Context, id string) error {
 
 	// Persist to SQLite
 	if b.store != nil {
-		b.store.RecordSession(sess.ID, sess.Profile, sess.Platform, sess.InstanceID, "", sess.Connection.ADBSerial, sess.Connection.Host, sess.Source, "released", b.nodeName, sess.Connection.ADBPort, sess.CreatedAt, sess.ReleasedAt)
+		b.store.RecordSession(sess.ID, sess.Profile, sess.Platform, sess.InstanceID, sess.DeviceName, sess.Connection.ADBSerial, sess.Connection.Host, sess.Source, "released", b.nodeName, sess.Connection.ADBPort, sess.CreatedAt, sess.ReleasedAt)
 		b.store.RecordEvent("session_released", sess.InstanceID, sess.ID, fmt.Sprintf("duration=%s", now.Sub(sess.CreatedAt)))
 	}
 
@@ -366,12 +366,17 @@ func (b *Broker) createSessionFromInstance(inst *pool.DeviceInstance, req Create
 	conn := b.buildConnectionInfo(inst)
 	conn.NodeName = b.nodeName
 
+	deviceName := ""
+	if inst.Device != nil {
+		deviceName = inst.Device.DisplayName()
+	}
 	sess := &Session{
 		ID:           sessionID,
 		NodeName:     b.nodeName,
 		Profile:      req.Profile,
 		Platform:     req.Platform,
 		InstanceID:   inst.ID,
+		DeviceName:   deviceName,
 		State:        SessionActive,
 		Connection:   conn,
 		ClientID:     req.ClientID,
@@ -499,7 +504,7 @@ func (b *Broker) enforceTimeouts(ctx context.Context) {
 
 		if sess, err := b.Get(id); err == nil {
 			if b.store != nil {
-				b.store.RecordSession(sess.ID, sess.Profile, sess.Platform, sess.InstanceID, "", sess.Connection.ADBSerial, sess.Connection.Host, sess.Source, "timed_out", b.nodeName, sess.Connection.ADBPort, sess.CreatedAt, sess.ReleasedAt)
+				b.store.RecordSession(sess.ID, sess.Profile, sess.Platform, sess.InstanceID, sess.DeviceName, sess.Connection.ADBSerial, sess.Connection.Host, sess.Source, "timed_out", b.nodeName, sess.Connection.ADBPort, sess.CreatedAt, sess.ReleasedAt)
 				b.store.RecordEvent("session_timed_out", sess.InstanceID, sess.ID, "")
 			}
 			_ = b.pool.Release(ctx, sess.InstanceID)

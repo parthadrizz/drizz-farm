@@ -69,6 +69,13 @@ export function Sessions() {
     return `${m}m ${s}s`;
   };
 
+  // AVD names are typically snake_case like "Pixel_7_API_34" or
+  // "drizz_api34_ext8_play_0". Snake_case reads as a filename; swap
+  // underscores for spaces so it reads as a device name in the UI.
+  // Leave the underlying name intact everywhere else (Appium, adb,
+  // avdmanager all want the exact form).
+  const prettyDeviceName = (name: string) => name.replace(/_/g, ' ');
+
   // Sessions list spans multiple days once you've been running for a
   // while — showing only the clock time ("2:55:44 PM") made it
   // impossible to tell yesterday's run from today's. Render as "Apr 24,
@@ -148,11 +155,18 @@ export function Sessions() {
                     {(s.node_name || s.connection?.node_name) && (
                       <span className="badge" style={{ background: 'hsl(var(--accent) / 0.1)', color: 'hsl(var(--accent))', border: '1px solid hsl(var(--accent) / 0.2)' }}>{s.node_name || s.connection?.node_name}</span>
                     )}
-                    <span>{s.profile || 'auto'} · {s.platform}</span>
+                    {/* Device name (e.g. "Pixel 7 · API 34") is the
+                        primary identifier — it's what the user picked
+                        in the New Session modal and what they'd recognise.
+                        Profile and platform demoted to secondary info,
+                        the opaque emulator-5556 serial hidden in the
+                        expanded detail panel. */}
+                    {s.device_name && (
+                      <span className="text-foreground font-medium">{prettyDeviceName(s.device_name)}</span>
+                    )}
+                    <span className="opacity-60">{s.profile || 'auto'} · {s.platform}</span>
                     <span>{formatTime(s.created_at)}</span>
                     {(s.duration_seconds && s.duration_seconds > 0) && <span className="opacity-60">duration: {formatDuration(s.duration_seconds)}</span>}
-                    {s.serial && <span className="font-mono opacity-50">{s.serial}</span>}
-                    {!s.serial && s.connection?.adb_serial && <span className="font-mono opacity-50">{s.connection.adb_serial}</span>}
                   </div>
                 </div>
                 <StatusBadge state={s.state} />
