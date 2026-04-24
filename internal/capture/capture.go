@@ -182,16 +182,32 @@ func (s *Service) videoChunkLoop(ctx context.Context, vc *videoCapture, dir stri
 		go func() { waitCh <- cmd.Wait() }()
 		select {
 		case <-ctx.Done():
-			// Stop called — ask screenrecord to finalize, then wait a
-			// few seconds for the MP4 header to close before we
-			// forcibly kill it.
-			if cmd.Process != nil {
-				_ = cmd.Process.Signal(os.Interrupt)
-			}
+			// Stop called. Finalizing the MP4 needs the screenrecord
+			// process INSIDE the emulator to receive a clean SIGINT
+			// so it writes the moov atom at EOF — otherwise the pulled
+			// file has no moov and browsers refuse to play it.
+			//
+			// Previously we called cmd.Process.Signal(os.Interrupt),
+			// but that SIGINTs the host-side `adb` binary, not the
+			// emulator-side screenrecord. Adb drops the connection,
+			// screenrecord is killed uncleanly by the broken pipe,
+			// and the resulting file is unplayable.
+			//
+			// The right move: use adb to pkill -SIGINT screenrecord
+			// on the device directly. Then wait up to 8s for the MP4
+			// to be fully flushed before we kill the host adb command.
+			sigCtx, sigCancel := context.WithTimeout(context.Background(), 3*time.Second)
+			// -2 = SIGINT (numeric form is most portable across
+			// Android's toybox pkill variations).
+			_ = exec.CommandContext(sigCtx, s.adbPath, "-s", vc.serial, "shell",
+				"pkill", "-2", "screenrecord").Run()
+			sigCancel()
 			select {
 			case <-waitCh:
-			case <-time.After(5 * time.Second):
-				_ = cmd.Process.Kill()
+			case <-time.After(8 * time.Second):
+				if cmd.Process != nil {
+					_ = cmd.Process.Kill()
+				}
 				<-waitCh
 			}
 		case err := <-waitCh:

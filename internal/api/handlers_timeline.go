@@ -119,6 +119,20 @@ func (h *timelineHandlers) Get(w http.ResponseWriter, r *http.Request) {
 		events = append(events, sEvents...)
 	}
 
+	// Drop events that happened before the session was even created.
+	// Adb logcat dumps the pre-session ring buffer on start, so the
+	// first few hundred lines are from the emulator's boot history,
+	// not from this run — they used to show up at relative_s = -15s
+	// on the player's timeline and confuse the user about when "0:00"
+	// actually was.
+	filtered := events[:0]
+	for _, e := range events {
+		if e.RelativeS >= 0 {
+			filtered = append(filtered, e)
+		}
+	}
+	events = filtered
+
 	// Sort by relative_s — merges all four sources cleanly.
 	sort.Slice(events, func(i, j int) bool {
 		return events[i].RelativeS < events[j].RelativeS
