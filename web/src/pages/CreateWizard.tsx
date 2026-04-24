@@ -28,6 +28,16 @@ export function CreateWizard({ isModal, onClose }: { isModal?: boolean; onClose?
 
   useEffect(() => { loadData(); }, []);
 
+  // Esc closes the flyout when used as a modal. Keyboard users
+  // previously had no way out except clicking the × icon, which
+  // several people missed because it's tucked in the header.
+  useEffect(() => {
+    if (!isModal || !onClose) return;
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [isModal, onClose]);
+
   const loadData = async () => {
     try {
       const [i, ai, d] = await Promise.all([api.systemImages(), api.availableImages(), api.devices()]);
@@ -127,7 +137,14 @@ export function CreateWizard({ isModal, onClose }: { isModal?: boolean; onClose?
           <p className="text-muted-foreground text-sm mt-1">Select hardware, system image, and configure your emulators.</p>
         </div>
         {isModal && onClose && (
-          <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition text-xl px-2">×</button>
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            title="Close (Esc)"
+            className="w-9 h-9 rounded-full border border-border surface-2 hover:surface-3 text-muted-foreground hover:text-foreground transition flex items-center justify-center text-lg leading-none"
+          >
+            ×
+          </button>
         )}
       </div>
 

@@ -233,7 +233,7 @@ export function Dashboard() {
           )}
           <div className="h-full surface-1 border-l border-border flex flex-col shadow-2xl">
             <div className="flex-1 overflow-y-auto p-6">
-              {showCreateModal && <CreateWizard onClose={() => { setShowCreateModal(false); refresh(); }} />}
+              {showCreateModal && <CreateWizard isModal onClose={() => { setShowCreateModal(false); refresh(); }} />}
             </div>
           </div>
         </div>
@@ -297,7 +297,7 @@ export function Dashboard() {
         )}
         <div className="h-full surface-1 border-l border-border flex flex-col shadow-2xl">
           <div className="flex-1 overflow-y-auto p-6">
-            {showCreateModal && <CreateWizard onClose={() => { setShowCreateModal(false); refresh(); }} />}
+            {showCreateModal && <CreateWizard isModal onClose={() => { setShowCreateModal(false); refresh(); }} />}
           </div>
         </div>
       </div>
