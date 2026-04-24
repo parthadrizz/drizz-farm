@@ -13,10 +13,23 @@ LDFLAGS := -s -w \
 ## build: Build React dashboard + Go binary (single distributable)
 build: build-dashboard
 	go build -ldflags "$(LDFLAGS)" -o bin/$(BINARY) github.com/drizz-dev/drizz-farm
+	@$(MAKE) --no-print-directory codesign
 
 ## build-go: Build Go binary only (skip dashboard rebuild)
 build-go:
 	go build -ldflags "$(LDFLAGS)" -o bin/$(BINARY) github.com/drizz-dev/drizz-farm
+	@$(MAKE) --no-print-directory codesign
+
+## codesign: Ad-hoc codesign on macOS so Gatekeeper doesn't SIGKILL
+## locally built binaries. Newer macOS (Sequoia+) enforces signature
+## checks on any executable in /usr/local/bin or similar, and an
+## unsigned Go binary gets "zsh: killed" with no explanation. The "-s -"
+## signature is ad-hoc (no Apple Dev ID needed) but satisfies the
+## runtime check. No-op on Linux.
+codesign:
+	@if [ "$$(uname)" = "Darwin" ] && [ -f bin/$(BINARY) ]; then \
+		codesign --force --sign - bin/$(BINARY) 2>/dev/null && echo "  → ad-hoc signed bin/$(BINARY)" || echo "  ⚠ codesign failed (non-fatal)"; \
+	fi
 
 ## build-dashboard: Build React dashboard and copy to embed directory
 build-dashboard:
