@@ -12,7 +12,7 @@ const BASE = '/api/v1';
 // Throws AbortError on timeout — existing `.catch()` paths in the
 // peer methods mark the node offline on any error, which is the
 // right behavior for a timeout too.
-async function peerFetch(url: string, init?: RequestInit, timeoutMs = 2500): Promise<Response> {
+async function peerFetch(url: string, init?: RequestInit, timeoutMs = 1500): Promise<Response> {
   const ctrl = new AbortController();
   const id = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
@@ -198,30 +198,38 @@ export const api = {
   // for ~30-120s — the dashboard goes to "waiting" forever. 2.5s
   // is long enough for a slow Wi-Fi LAN, short enough that "the
   // other Mac is off" flips to OFFLINE in one refresh cycle.
+  // Two categories of cross-node call:
+  //   - Background probes (pool/health/avds, polled every 5s): short
+  //     AbortController timeout so one dead peer doesn't freeze the UI.
+  //   - User-clicked actions (boot/shutdown/reserve): NO browser-side
+  //     timeout. Booting an emulator can legitimately take 20–60s,
+  //     and the only thing worse than waiting is alerting "signal is
+  //     aborted without reason" at 10s while the op is still in flight.
+  //     The server has its own timeouts; we just wait for the response.
   peer: {
     pool: (nodeURL: string) => peerFetch(`${nodeURL}/api/v1/pool`).then(r => r.json()),
     health: (nodeURL: string) => peerFetch(`${nodeURL}/api/v1/node/health`).then(r => r.json()),
     avds: (nodeURL: string) => peerFetch(`${nodeURL}/api/v1/discovery/avds`).then(r => r.json()),
     boot: (nodeURL: string, avdName: string) =>
-      peerFetch(`${nodeURL}/api/v1/pool/boot`, {
+      fetch(`${nodeURL}/api/v1/pool/boot`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ avd_name: avdName }),
-      }, 10_000).then(r => r.json()),
+      }).then(r => r.json()),
     shutdown: (nodeURL: string, instanceId: string) =>
-      peerFetch(`${nodeURL}/api/v1/pool/shutdown`, {
+      fetch(`${nodeURL}/api/v1/pool/shutdown`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ instance_id: instanceId }),
-      }, 10_000).then(r => r.json()),
+      }).then(r => r.json()),
     reserve: (nodeURL: string, instanceId: string, label?: string) =>
-      peerFetch(`${nodeURL}/api/v1/devices/${encodeURIComponent(instanceId)}/reserve`, {
+      fetch(`${nodeURL}/api/v1/devices/${encodeURIComponent(instanceId)}/reserve`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ label: label || '' }),
       }).then(r => r.json()),
     unreserve: (nodeURL: string, instanceId: string) =>
-      peerFetch(`${nodeURL}/api/v1/devices/${encodeURIComponent(instanceId)}/reserve`,
+      fetch(`${nodeURL}/api/v1/devices/${encodeURIComponent(instanceId)}/reserve`,
         { method: 'DELETE' }).then(r => r.json()),
   },
 

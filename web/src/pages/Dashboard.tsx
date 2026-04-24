@@ -16,6 +16,13 @@ interface NodeSnapshot {
   health?: NodeHealth;
   avds?: { name: string; display_name?: string }[];
   error?: string;
+  // True while this node's peer fetches are in flight for the current
+  // refresh tick. Rendered as a subtle dimming of the card so you can
+  // tell the data you're looking at is being revalidated — previously
+  // the UI couldn't tell "this peer just went offline" from "we're
+  // still waiting on it", so Zaid's old cached snapshot looked like
+  // current state for up to 2.5s before flipping to offline.
+  refreshing?: boolean;
 }
 
 function formatUptime(raw: string): string {
@@ -61,7 +68,12 @@ export function Dashboard() {
       // peers just stay on their "offline" badge without blocking.
       setNodes(prev => {
         const byName = new Map(prev.map(n => [n.entry.name, n]));
-        return list.nodes.map(entry => byName.get(entry.name) ?? { entry, online: false });
+        return list.nodes.map(entry => {
+          const existing = byName.get(entry.name);
+          return existing
+            ? { ...existing, refreshing: true }
+            : { entry, online: false, refreshing: true };
+        });
       });
       setError('');
 
@@ -76,14 +88,14 @@ export function Dashboard() {
           if (gen !== genRef.current) return;
           setNodes(prev => prev.map(n =>
             n.entry.name === entry.name
-              ? { entry, online: true, pool, health, avds: avdsResp.avds || [] }
+              ? { entry, online: true, pool, health, avds: avdsResp.avds || [], refreshing: false }
               : n
           ));
         } catch (e: any) {
           if (gen !== genRef.current) return;
           setNodes(prev => prev.map(n =>
             n.entry.name === entry.name
-              ? { entry, online: false, error: e?.message || 'unreachable' }
+              ? { entry, online: false, error: e?.message || 'unreachable', refreshing: false }
               : n
           ));
         }
@@ -367,7 +379,7 @@ function NodeSection({
   const usbCount = pool.instances.filter(i => i.device_kind === 'android_usb').length;
 
   return (
-    <div className="section-card">
+    <div className={`section-card transition-opacity duration-200 ${node.refreshing ? 'opacity-60' : ''}`}>
       <div className="section-header">
         <div className="flex items-center gap-2.5">
           <Server className="w-3.5 h-3.5 text-muted-foreground" />
