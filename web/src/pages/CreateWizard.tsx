@@ -18,7 +18,7 @@ export function CreateWizard({ isModal, onClose }: { isModal?: boolean; onClose?
   const [activeCategory, setActiveCategory] = useState('phone');
   const [installing, setInstalling] = useState<string | null>(null);
   const [installLog, setInstallLog] = useState<string>('');
-  const [createResult, setCreateResult] = useState<{ created: number; errors: string[] } | null>(null);
+  const [createResult, setCreateResult] = useState<{ created: number; names?: string[]; errors: string[] } | null>(null);
   const [deviceFilter, setDeviceFilter] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [ramMB, setRamMB] = useState(2048);
@@ -97,7 +97,15 @@ export function CreateWizard({ isModal, onClose }: { isModal?: boolean; onClose?
         disk_size_mb: diskSizeMB || undefined,
         gpu: gpu === 'auto' ? undefined : gpu,
       });
-      setCreateResult(result); setStep('done');
+      setCreateResult(result);
+      setStep('done');
+      // If the wizard is opened as a modal from the Dashboard, auto-
+      // close after a short "look at the result" delay so the user
+      // ends up back on the refreshed Dashboard with their new AVDs
+      // visible. They don't have to hunt for the Close button.
+      if (onClose) {
+        setTimeout(() => onClose(), 2000);
+      }
     } catch (e: any) { setError(e.message); setStep('configure'); }
   };
 
@@ -392,27 +400,46 @@ export function CreateWizard({ isModal, onClose }: { isModal?: boolean; onClose?
       {step === 'creating' && (
         <div className="text-center py-16">
           <div className="w-8 h-8 border-2 border-muted border-t-primary rounded-full animate-spin mx-auto mb-4" />
-          <div className="text-foreground">Creating emulators...</div>
+          <div className="text-foreground font-medium">Creating {count} emulator{count > 1 ? 's' : ''}…</div>
+          <div className="text-muted-foreground text-xs mt-2">
+            Profile: <span className="font-mono text-foreground">{profileName}</span>
+          </div>
+          <div className="text-muted-foreground text-xs mt-1">
+            {selectedDevice?.name} · {selectedImage?.api_name}
+          </div>
+          <div className="text-muted-foreground text-[11px] mt-4">
+            avdmanager writes each AVD to ~/.android/avd — takes 2–10 s per device.
+          </div>
         </div>
       )}
 
       {/* Done */}
       {step === 'done' && createResult && (
-        <div className="text-center py-16">
+        <div className="text-center py-16 animate-fade-in">
           <div className="text-4xl mb-4">✓</div>
-          <div className="text-foreground text-lg font-semibold">{createResult.created} emulator{createResult.created > 1 ? 's' : ''} created</div>
-          {/* Backend returns `errors: null` when there are none (Go's
-              zero-value for a nil slice encodes as null). A bare
-              `.length` on null threw, unmounted the component, and
-              React Router sent the user back to "/". Treat null/
-              undefined as empty. */}
+          <div className="text-foreground text-lg font-semibold">
+            {createResult.created} emulator{createResult.created !== 1 ? 's' : ''} created
+          </div>
+          {createResult.names && createResult.names.length > 0 && (
+            <div className="mt-3 inline-block text-left">
+              {createResult.names.map(n => (
+                <div key={n} className="text-sm font-mono text-muted-foreground py-0.5">
+                  · {n}
+                </div>
+              ))}
+            </div>
+          )}
           {createResult.errors && createResult.errors.length > 0 && (
             <div className="mt-3 text-sm text-destructive">{createResult.errors.join(', ')}</div>
           )}
-          <button onClick={() => { if (onClose) onClose(); else setStep('device'); }}
-            className="action-btn action-btn-primary mt-6 px-6 py-2.5">
-            {isModal ? 'Close' : 'Create More'}
-          </button>
+          {onClose ? (
+            <div className="text-muted-foreground text-xs mt-6">Refreshing dashboard…</div>
+          ) : (
+            <button onClick={() => setStep('device')}
+              className="action-btn action-btn-primary mt-6 px-6 py-2.5">
+              Create More
+            </button>
+          )}
         </div>
       )}
     </div>

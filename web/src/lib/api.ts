@@ -258,7 +258,7 @@ export const api = {
     disk_size_mb?: number;
     gpu?: string;
   }) =>
-    fetchJSON<{ created: number; errors: string[] }>('/discovery/create-avds', { method: 'POST', body: JSON.stringify(data) }),
+    fetchJSON<{ created: number; names: string[]; errors: string[] }>('/discovery/create-avds', { method: 'POST', body: JSON.stringify(data) }),
 
   // Pool-level devices list with filters. `free=true` narrows to
   // "warm AND not reserved" so automated callers see exactly what

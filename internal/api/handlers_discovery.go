@@ -283,10 +283,10 @@ func (h *discoveryHandlers) CreateAVDs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	avdMgr := android.NewAVDManager(h.sdk, h.runner)
-	created := 0
-	// Initialize as [] so the response is `errors: []` instead of
-	// `errors: null` when nothing failed. Clients that do
-	// `resp.errors.length` otherwise crash on null.
+	// Initialize slices (not nil) so the JSON always has `names: []`
+	// and `errors: []` instead of null — clients that do `.length`
+	// on the fields don't have to null-check.
+	names := []string{}
 	errors := []string{}
 
 	for i := 0; i < req.Count; i++ {
@@ -295,14 +295,15 @@ func (h *discoveryHandlers) CreateAVDs(w http.ResponseWriter, r *http.Request) {
 			errors = append(errors, fmt.Sprintf("%s: %v", name, err))
 			continue
 		}
-		created++
+		names = append(names, name)
 		if h.store != nil {
 			h.store.RecordAVDCreation(name, req.ProfileName, req.Device, req.SystemImage)
 		}
 	}
 
 	JSON(w, http.StatusOK, map[string]any{
-		"created": created,
+		"created": len(names),
+		"names":   names,
 		"errors":  errors,
 	})
 }
