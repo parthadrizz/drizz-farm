@@ -239,6 +239,11 @@ type createAVDsRequest struct {
 	Device      string `json:"device"`
 	SystemImage string `json:"system_image"`
 	Count       int    `json:"count"`
+	// Optional explicit name(s). If set, drizz uses these literally
+	// for the AVDs created (count must equal len(names)). When empty,
+	// the daemon generates `drizz_<profile>_<i>_<rand6>` names so
+	// repeated `create` calls never collide with prior runs.
+	Names []string `json:"names,omitempty"`
 	// Optional resource overrides — sane defaults applied when zero.
 	RAMMB      int    `json:"ram_mb,omitempty"`
 	HeapMB     int    `json:"heap_mb,omitempty"`
@@ -284,13 +289,32 @@ func (h *discoveryHandlers) CreateAVDs(w http.ResponseWriter, r *http.Request) {
 
 	avdMgr := android.NewAVDManager(h.sdk, h.runner)
 	// Initialize slices (not nil) so the JSON always has `names: []`
-	// and `errors: []` instead of null — clients that do `.length`
-	// on the fields don't have to null-check.
+	// and `errors: []` instead of null.
 	names := []string{}
 	errors := []string{}
 
-	for i := 0; i < req.Count; i++ {
-		name := android.AVDName(req.ProfileName, i)
+	// Decide the actual names. If the caller supplied them, use those
+	// literally (and validate count). Otherwise generate names that
+	// can't possibly collide with existing AVDs by tagging each with
+	// a 6-char random suffix.
+	var plannedNames []string
+	if len(req.Names) > 0 {
+		if len(req.Names) != req.Count {
+			JSON(w, http.StatusBadRequest, ErrorResponse{
+				Error:   "invalid_request",
+				Message: fmt.Sprintf("len(names)=%d but count=%d — must match", len(req.Names), req.Count),
+				Code:    400,
+			})
+			return
+		}
+		plannedNames = req.Names
+	} else {
+		for i := 0; i < req.Count; i++ {
+			plannedNames = append(plannedNames, android.AVDNameWithSuffix(req.ProfileName, i))
+		}
+	}
+
+	for _, name := range plannedNames {
 		if err := avdMgr.Create(r.Context(), name, profile); err != nil {
 			errors = append(errors, fmt.Sprintf("%s: %v", name, err))
 			continue

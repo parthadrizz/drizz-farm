@@ -183,6 +183,12 @@ func (h *timelineHandlers) sessionStart(sid string) (time.Time, string, bool) {
 // Year is missing (!) from every line, so we infer the year from
 // session start — a single calendar transition mid-session is a
 // ~7-hour edge case we accept getting wrong for now.
+// parseLogcat handles `adb logcat -v epoch` output. Each line starts
+// with a Unix-timestamp prefix (seconds.millis), which dodges the TZ
+// drift between emulator and host that the old threadtime parser used
+// to silently miss. Falls back to the legacy "MM-DD HH:MM:SS.mmm"
+// format for captures taken with older daemons so old session
+// artifacts still render on the timeline.
 func parseLogcat(path string, t0 time.Time) ([]TimelineEvent, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -191,34 +197,57 @@ func parseLogcat(path string, t0 time.Time) ([]TimelineEvent, error) {
 	defer f.Close()
 
 	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 1<<20), 1<<20) // handle long lines
+	scanner.Buffer(make([]byte, 0, 1<<20), 1<<20)
 	var out []TimelineEvent
 	year := t0.Year()
 
 	for scanner.Scan() {
-		line := scanner.Text()
-		if len(line) < 18 {
+		raw := scanner.Text()
+		// adb logcat right-pads the epoch timestamp with leading spaces
+		// for column alignment (e.g. "         1729795316.197 …").
+		// Trim them so the first field parses cleanly.
+		line := strings.TrimLeft(raw, " ")
+		if len(line) < 15 {
 			continue
 		}
-		// Parse timestamp prefix.
-		ts, err := time.ParseInLocation("2006 01-02 15:04:05.000",
-			fmt.Sprintf("%d %s", year, line[:18]), t0.Location())
-		if err != nil {
+
+		var ts time.Time
+		var restStart int
+		// Epoch format: "1729795316.197 <tid> <tid> <lvl> tag: msg"
+		if parts := strings.SplitN(line, " ", 2); len(parts) == 2 && strings.Contains(parts[0], ".") {
+			if secStr, msStr, ok := strings.Cut(parts[0], "."); ok {
+				if sec, err1 := strconv.ParseInt(secStr, 10, 64); err1 == nil {
+					if ms, err2 := strconv.ParseInt(msStr, 10, 64); err2 == nil && sec > 1_000_000_000 {
+						ts = time.Unix(sec, ms*int64(time.Millisecond))
+						restStart = len(parts[0]) + 1
+					}
+				}
+			}
+		}
+		// Legacy threadtime fallback: "04-24 23:38:10.197 ..."
+		if ts.IsZero() && len(line) >= 18 {
+			if parsed, err := time.ParseInLocation("2006 01-02 15:04:05.000",
+				fmt.Sprintf("%d %s", year, line[:18]), t0.Location()); err == nil {
+				ts = parsed
+				restStart = 18
+			}
+		}
+		if ts.IsZero() || restStart >= len(line) {
 			continue
 		}
-		// Scan for " E " or " W " (level marker sits after TID).
+		rest := line[restStart:]
+
 		level := ""
-		if strings.Contains(line[18:], " E ") {
+		if strings.Contains(rest, " E ") {
 			level = "error"
-		} else if strings.Contains(line[18:], " W ") {
+		} else if strings.Contains(rest, " W ") {
 			level = "warn"
 		} else {
-			continue // skip info/debug/verbose to keep the timeline readable
+			continue // skip info/debug/verbose
 		}
-		// Message is everything after the colon that follows the tag.
-		msg := line
-		if i := strings.Index(line, ": "); i > 0 {
-			msg = strings.TrimSpace(line[i+2:])
+		msg := rest
+		if i := strings.Index(rest, ": "); i > 0 {
+			msg = strings.TrimSpace(rest[i+2:])
 		}
 		if len(msg) > 400 {
 			msg = msg[:400] + "…"

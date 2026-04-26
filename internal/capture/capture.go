@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -374,7 +375,14 @@ func (s *Service) StartLogcat(sessionID, serial string) error {
 	clearCancel()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	cmd := exec.CommandContext(ctx, s.adbPath, "-s", serial, "logcat", "-b", "all", "-v", "threadtime")
+	// -v epoch writes each line with a Unix-timestamp prefix (e.g.
+	// "1729795316.197  153 153 I tag: msg") instead of the default
+	// month-day-HH-MM-SS that depended on the emulator's local clock
+	// — which drifts independently of the host. With epoch the timeline
+	// parser can compute relative_s against the session's started_at
+	// without a TZ-conversion bug making every logcat event look like
+	// it happened before the session (and then getting filtered out).
+	cmd := exec.CommandContext(ctx, s.adbPath, "-s", serial, "logcat", "-b", "all", "-v", "epoch")
 	cmd.Stdout = f
 	cmd.Stderr = f
 	if err := cmd.Start(); err != nil {
@@ -441,6 +449,31 @@ func (s *Service) StartNetwork(sessionID, serial string) error {
 		log.Warn().Str("session", sessionID).Msg("capture: mitmdump not found on PATH — install with `brew install mitmproxy` to enable network capture")
 		return fmt.Errorf("mitmdump not found: %w", err)
 	}
+
+	// Make sure the mitmproxy CA exists on the host. mitmproxy generates
+	// it on first run; if the user just installed mitmproxy and never
+	// ran it, we kick off a 2s mitmdump invocation to force generation.
+	caPath := os.ExpandEnv("$HOME/.mitmproxy/mitmproxy-ca-cert.pem")
+	if _, err := os.Stat(caPath); os.IsNotExist(err) {
+		log.Info().Msg("capture: generating mitmproxy CA cert (first run)")
+		genCtx, genCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		gen := exec.CommandContext(genCtx, mitmdump, "-q", "--listen-port", "0")
+		_ = gen.Start()
+		// 2s is enough; mitmdump emits the cert as soon as it loads.
+		time.Sleep(2 * time.Second)
+		_ = gen.Process.Kill()
+		_, _ = gen.Process.Wait()
+		genCancel()
+	}
+
+	// Install the CA into the emulator's system trust store so HTTPS
+	// interception works. Without this, every Chrome / app HTTPS
+	// connection sees mitmproxy's self-signed cert, fails validation,
+	// and HAR captures stay empty (only plain-HTTP traffic gets
+	// recorded). Best-effort: if `adb root` is denied (production
+	// build) or the apex remount fails (older API), we log and
+	// proceed — HTTP capture still works.
+	s.installMitmCAOnDevice(sessionID, serial, caPath)
 
 	dir := filepath.Join(s.dataDir, "artifacts", sessionID)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -552,6 +585,101 @@ func (s *Service) StopAll(sessionID string) {
 	s.StopVideo(sessionID)
 	s.StopLogcat(sessionID)
 	s.StopNetwork(sessionID)
+}
+
+// installMitmCAOnDevice pushes the mitmproxy CA into the emulator's
+// system trust store. The non-obvious part: the cert filename must be
+// the OpenSSL-style "subject_hash_old" with extension ".0", and it
+// has to land in /system/etc/security/cacerts/ which on emulator
+// images launched without --writable-system is read-only. We try the
+// modern emulator path:
+//
+//   adb root
+//   adb remount             (only succeeds with -writable-system)
+//   push the cert + chmod
+//
+// If remount is denied we don't fail the whole network capture —
+// the HAR still records HTTP traffic and that's the documented
+// baseline. We log a clear hint so users know to relaunch with
+// `emulator -avd ... -writable-system` if they want full HTTPS.
+//
+// Only runs once per (serial, ca-fingerprint) — adb operations are
+// expensive and the cert never changes once installed.
+func (s *Service) installMitmCAOnDevice(sessionID, serial, caPath string) {
+	hash, err := computeSubjectHashOld(caPath)
+	if err != nil {
+		log.Warn().Err(err).Msg("capture: cannot compute Android cert hash — skipping CA install")
+		return
+	}
+
+	// Quick-check: is the cert already installed? Avoids 5s+ of
+	// adb churn on every session start.
+	target := fmt.Sprintf("/system/etc/security/cacerts/%s.0", hash)
+	check := exec.Command(s.adbPath, "-s", serial, "shell", "ls", target)
+	if check.Run() == nil {
+		log.Debug().Str("session", sessionID).Str("hash", hash).Msg("capture: mitm CA already on device")
+		return
+	}
+
+	// adb root → required to write to /system. Non-fatal if denied.
+	rootCtx, rootCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer rootCancel()
+	if out, err := exec.CommandContext(rootCtx, s.adbPath, "-s", serial, "root").CombinedOutput(); err != nil ||
+		strings.Contains(string(out), "production builds") {
+		log.Warn().
+			Str("session", sessionID).
+			Str("output", strings.TrimSpace(string(out))).
+			Msg("capture: adb root denied — HTTPS interception will fail; only HTTP traffic captured. Relaunch emulator with `-writable-system` to enable.")
+		return
+	}
+	// adb root drops the connection briefly; wait for it back.
+	time.Sleep(1 * time.Second)
+	exec.Command(s.adbPath, "-s", serial, "wait-for-device").Run()
+
+	// Remount /system rw. Newer emulators (API 30+) need overlayfs
+	// disable + reboot; we attempt the simple remount first.
+	remountCtx, remountCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer remountCancel()
+	if out, err := exec.CommandContext(remountCtx, s.adbPath, "-s", serial, "remount").CombinedOutput(); err != nil ||
+		!strings.Contains(strings.ToLower(string(out)), "remount succeeded") {
+		log.Warn().
+			Str("session", sessionID).
+			Str("output", strings.TrimSpace(string(out))).
+			Msg("capture: adb remount failed — HTTPS interception requires emulator -writable-system. HTTP capture continues.")
+		return
+	}
+
+	// Push cert to /sdcard, then move into the system store.
+	pushCtx, pushCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer pushCancel()
+	tmp := fmt.Sprintf("/sdcard/%s.0", hash)
+	if err := exec.CommandContext(pushCtx, s.adbPath, "-s", serial, "push", caPath, tmp).Run(); err != nil {
+		log.Warn().Err(err).Msg("capture: adb push CA cert failed")
+		return
+	}
+	mvCtx, mvCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer mvCancel()
+	if err := exec.CommandContext(mvCtx, s.adbPath, "-s", serial, "shell",
+		"cp", tmp, target, "&&", "chmod", "644", target).Run(); err != nil {
+		log.Warn().Err(err).Str("target", target).Msg("capture: cp CA cert into system store failed")
+		return
+	}
+	log.Info().Str("session", sessionID).Str("path", target).Msg("capture: mitm CA installed on device")
+}
+
+// computeSubjectHashOld replicates `openssl x509 -subject_hash_old`,
+// which Android uses to name CA certs in /system/etc/security/cacerts.
+// The "old" variant matches MD5 of the canonical DER subject; the
+// "new" variant (SHA-1) is for OpenSSL ≥1.0 but Android still wants
+// the old form. We shell out to openssl rather than reimplement the
+// canonicalization to keep the code small and bug-free.
+func computeSubjectHashOld(certPath string) (string, error) {
+	out, err := exec.Command("openssl", "x509", "-inform", "PEM",
+		"-subject_hash_old", "-noout", "-in", certPath).Output()
+	if err != nil {
+		return "", fmt.Errorf("openssl: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 // lineWriter invokes fn on every newline-terminated line written to

@@ -1047,6 +1047,122 @@ func checkAndroidEmulator() checkResult {
 	return r
 }
 
+// ── Node / Appium / mitmproxy prereqs ───────────────────────────────
+// These are required so drizz-farm's /wd/hub compat can spawn a
+// per-session Appium server (Node + appium + uiautomator2 driver),
+// and for drizz:capture_network to actually produce a HAR (mitmproxy).
+// Without them the daemon still boots, but sessions fail with cryptic
+// errors the first time a user's Appium client connects. Adding these
+// to EnsurePrereqs means `drizz-farm setup --install` fixes the whole
+// chain — users don't have to hunt for docs.
+
+// checkNode requires a Node version Appium 3.x accepts:
+// ^20.19.0 || ^22.12.0 || >=24.0.0. Anything else (notably Node 21
+// and 23) makes Appium refuse to start — silently, in its own child
+// process, so we never see the error until a test fails.
+func checkNode() checkResult {
+	r := checkResult{name: "Node.js"}
+	p := findBinary("node")
+	if p == "" {
+		r.detail = "not found"
+		r.fixCmd = "brew install node@22"
+		return r
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, p, "--version").Output()
+	if err != nil {
+		r.detail = fmt.Sprintf("broken (%s)", p)
+		return r
+	}
+	ver := strings.TrimSpace(strings.TrimPrefix(string(out), "v"))
+	// Parse major.minor; reject unsupported combos.
+	var major, minor int
+	fmt.Sscanf(ver, "%d.%d", &major, &minor)
+	supported := (major == 20 && minor >= 19) ||
+		(major == 22 && minor >= 12) ||
+		major >= 24
+	if !supported {
+		r.detail = fmt.Sprintf("v%s (Appium needs ^20.19 || ^22.12 || >=24)", ver)
+		r.fixCmd = "brew install node@22 && brew unlink node && brew link --overwrite --force node@22"
+		return r
+	}
+	r.ok = true
+	r.path = p
+	r.detail = fmt.Sprintf("v%s (%s)", ver, p)
+	return r
+}
+
+func checkAppium() checkResult {
+	r := checkResult{name: "Appium"}
+	p := findBinary("appium")
+	if p == "" {
+		r.detail = "not found"
+		r.fixCmd = "npm install -g appium"
+		return r
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, p, "--version").Output()
+	if err != nil {
+		r.detail = fmt.Sprintf("broken (%s)", p)
+		return r
+	}
+	r.ok = true
+	r.path = p
+	r.detail = fmt.Sprintf("v%s (%s)", strings.TrimSpace(string(out)), p)
+	return r
+}
+
+func checkAppiumDriverUIA2() checkResult {
+	r := checkResult{name: "Appium uiautomator2 driver"}
+	appium := findBinary("appium")
+	if appium == "" {
+		r.detail = "appium not installed yet"
+		return r
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, appium, "driver", "list", "--installed").CombinedOutput()
+	if err != nil {
+		r.detail = fmt.Sprintf("driver list failed: %v", err)
+		return r
+	}
+	if !strings.Contains(strings.ToLower(string(out)), "uiautomator2") {
+		r.detail = "not installed"
+		r.fixCmd = "appium driver install uiautomator2"
+		return r
+	}
+	r.ok = true
+	r.detail = "installed"
+	return r
+}
+
+// mitmproxy is optional — only needed if a session declares
+// drizz:capture_network=true. Marked optional in the EnsurePrereqs
+// caller so its absence doesn't fail setup.
+func checkMitmproxy() checkResult {
+	r := checkResult{name: "mitmproxy"}
+	p := findBinary("mitmdump")
+	if p == "" {
+		r.detail = "not installed (optional — only for capture_network)"
+		r.fixCmd = "brew install mitmproxy"
+		return r
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, p, "--version").Output()
+	if err != nil {
+		r.detail = fmt.Sprintf("broken (%s)", p)
+		return r
+	}
+	first := strings.SplitN(strings.TrimSpace(string(out)), "\n", 2)[0]
+	r.ok = true
+	r.path = p
+	r.detail = fmt.Sprintf("%s (%s)", first, p)
+	return r
+}
+
 func checkAndroidSystemImages() checkResult {
 	r := checkResult{name: "Android System Images"}
 	sdkRoot := findAndroidSDK()

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -81,7 +82,7 @@ func NewBroker(cfg *config.Config, p *pool.Pool, s *store.Store) *Broker {
 		pool:     p,
 		store:    s,
 		webhook:  webhook.NewSender(webhookURLs),
-		appium:   appium.NewManager(detectLANIP()),
+		appium:   appium.NewManager(detectLANIP(), cfg.SDK.Root, javaHomeFromJava(cfg.SDK.Java)),
 		queue:    NewQueue(cfg.Pool.QueueMaxSize, queueTimeout),
 		cfg:      cfg,
 		hostIP:   detectLANIP(),
@@ -450,6 +451,7 @@ func (b *Broker) createSessionFromInstance(inst *pool.DeviceInstance, req Create
 		}
 		if appInst, err := b.appium.Start(sess.ID, serial); err == nil {
 			sess.Connection.AppiumURL = appInst.WebDriverURL
+			sess.Connection.AppiumLocalURL = appInst.LocalURL
 			log.Info().Str("session", sess.ID).Str("appium", appInst.WebDriverURL).Msg("broker: Appium server started")
 		} else {
 			log.Warn().Err(err).Str("session", sess.ID).Msg("broker: Appium start failed (session still works via ADB)")
@@ -581,6 +583,17 @@ func (b *Broker) buildConnectionInfo(inst *pool.DeviceInstance) ConnectionInfo {
 		ConsolePort: devConn.ConsolePort,
 		UDID:        devConn.UDID,
 	}
+}
+
+// javaHomeFromJava derives JAVA_HOME from the path of the java
+// executable. cfg.SDK.Java points at .../Contents/Home/bin/java on
+// macOS; we want .../Contents/Home. Empty in, empty out.
+func javaHomeFromJava(javaBin string) string {
+	if javaBin == "" {
+		return ""
+	}
+	// .../bin/java → .../
+	return filepath.Dir(filepath.Dir(javaBin))
 }
 
 // detectLANIP returns the first non-loopback IPv4 address.

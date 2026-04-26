@@ -323,7 +323,9 @@ export function CreateWizard({ isModal, onClose }: { isModal?: boolean; onClose?
               <label className="text-sm font-medium text-foreground">Profile Name</label>
               <input value={profileName} onChange={e => setProfileName(e.target.value)}
                 className="w-full mt-2 px-3 py-2 rounded-lg surface-2 border border-border text-sm font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-primary" />
-              <p className="text-[11px] text-muted-foreground mt-1">Used as AVD name prefix</p>
+              <p className="text-[11px] text-muted-foreground mt-1">
+                Used as AVD name prefix. Final name will be <span className="font-mono">drizz_{`{profile}`}_{`{idx}`}_{`{rand}`}</span> so re-running create never overwrites existing AVDs.
+              </p>
             </div>
             <div className="px-5 py-4">
               <label className="text-sm font-medium text-foreground">Count</label>

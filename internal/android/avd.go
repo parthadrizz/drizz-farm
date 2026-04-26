@@ -3,10 +3,12 @@ package android
 import (
 	"bufio"
 	"context"
+	cryptorand "crypto/rand"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/drizz-dev/drizz-farm/internal/config"
 )
@@ -59,12 +61,18 @@ func (m *AVDManager) Create(ctx context.Context, name string, profile config.And
 		device = "pixel"
 	}
 
+	// No --force here. avdmanager --force silently obliterates an
+	// existing AVD with the same name — a footgun that ate users'
+	// running setups when they ran "create" a second time. We rely
+	// on the caller (handlers_discovery.CreateAVDs) to pick a fresh
+	// index that doesn't collide. If the caller passes a name that
+	// IS taken, avdmanager errors with "already exists" and we
+	// surface that, which is the desired behavior.
 	args := []string{
 		"create", "avd",
 		"--name", name,
 		"--package", systemImage,
 		"--device", device,
-		"--force",
 	}
 
 	// avdmanager prompts for custom hardware profile; pipe "no" to skip
@@ -255,6 +263,36 @@ func (m *AVDManager) Exists(ctx context.Context, name string) (bool, error) {
 }
 
 // AVDName generates the drizz-farm AVD name for a profile and index.
+// Kept for backwards compatibility with old code paths that compute
+// names directly. New callers should use AVDNameWithSuffix so a
+// "create 2 emulators" call twice doesn't collide on drizz_x_0.
 func AVDName(profileName string, index int) string {
 	return fmt.Sprintf("drizz_%s_%d", profileName, index)
+}
+
+// AVDNameWithSuffix returns drizz_<profile>_<index>_<6-char random>.
+// The random suffix means re-running "create" with the same profile
+// produces fresh names every time — no more silent obliteration of
+// existing AVDs. Random is cryptographic so two parallel daemons
+// can't collide either.
+func AVDNameWithSuffix(profileName string, index int) string {
+	return fmt.Sprintf("drizz_%s_%d_%s", profileName, index, randSuffix(6))
+}
+
+func randSuffix(n int) string {
+	const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
+	b := make([]byte, n)
+	if _, err := cryptorand.Read(b); err != nil {
+		// Fall back to time-based ordering — collision-resistant
+		// enough for a single host.
+		t := time.Now().UnixNano()
+		for i := range b {
+			b[i] = alphabet[int(t>>(uint(i)*8))%len(alphabet)]
+		}
+		return string(b)
+	}
+	for i, v := range b {
+		b[i] = alphabet[int(v)%len(alphabet)]
+	}
+	return string(b)
 }

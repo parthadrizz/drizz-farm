@@ -60,6 +60,10 @@ func RegisterRoutes(r chi.Router, cfg *config.Config, p *pool.Pool, b *session.B
 	r.Get("/wd/hub/status", appH.Status)
 	r.Get("/wd/hub/sessions", appH.Sessions)
 	r.Post("/wd/hub/session", appH.Create)
+	// Drizz extension: look up the drizz session id from the Appium
+	// session id. Must be registered BEFORE the catch-all Proxy route
+	// below so Chi dispatches it instead of forwarding to Appium.
+	r.Get("/wd/hub/session/{sid}/drizz-session-id", appH.DrizzSessionID)
 	r.HandleFunc("/wd/hub/session/{sid}/*", appH.Proxy)
 	r.HandleFunc("/wd/hub/session/{sid}", appH.Proxy)
 

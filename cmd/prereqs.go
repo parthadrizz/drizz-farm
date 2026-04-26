@@ -114,11 +114,37 @@ func EnsurePrereqs(autoInstall bool) bool {
 		_ = ensure("Xcode CLI Tools", checkXcodeCLI, true)
 	}
 
+	// ── Appium toolchain. Required for /wd/hub drop-in compatibility.
+	// Checked after the Android stack so setup shows a coherent
+	// progression (device → JDK → SDK → tools → Appium → mitmproxy).
+	node := ensure("Node.js", checkNode, false)
+	var appium checkResult
+	if node.ok {
+		appium = ensure("Appium", checkAppium, false)
+		if appium.ok {
+			_ = ensure("Appium uiautomator2 driver", checkAppiumDriverUIA2, false)
+		} else {
+			printStatus("Appium uiautomator2 driver", "○", "skipped (needs Appium)")
+		}
+	} else {
+		printStatus("Appium", "○", "skipped (needs Node)")
+		printStatus("Appium uiautomator2 driver", "○", "skipped (needs Node)")
+	}
+
+	// mitmproxy is optional — only sessions that set
+	// drizz:capture_network=true require it. We still try to install
+	// it when autoInstall=true so the feature Just Works when users
+	// flip the capability later.
+	_ = ensure("mitmproxy", checkMitmproxy, true)
+
 	allOK := true
-	for _, c := range []checkResult{brew, jdk, sdk, cmdline, adb, emu} {
+	for _, c := range []checkResult{brew, jdk, sdk, cmdline, adb, emu, node} {
 		if !c.ok {
 			allOK = false
 		}
+	}
+	if node.ok && !appium.ok {
+		allOK = false
 	}
 	return allOK
 }

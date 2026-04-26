@@ -91,7 +91,13 @@ type ConnectionInfo struct {
 	ADBPort      int    `json:"adb_port,omitempty"`
 	ADBSerial    string `json:"adb_serial,omitempty"`
 	ConsolePort  int    `json:"console_port,omitempty"`
-	AppiumURL    string `json:"appium_url,omitempty"` // WebDriver endpoint
+	AppiumURL    string `json:"appium_url,omitempty"` // WebDriver endpoint — external clients
+	// AppiumLocalURL is the 127.0.0.1 variant used by the daemon's
+	// internal /wd/hub proxy to forward to the per-session Appium.
+	// Kept separate from AppiumURL so external clients still see the
+	// LAN IP; the local URL survives the host's LAN IP changing
+	// (Wi-Fi switch, VPN on/off) because loopback never moves.
+	AppiumLocalURL string `json:"-"`
 	UDID         string `json:"udid,omitempty"`       // iOS future
 }
 

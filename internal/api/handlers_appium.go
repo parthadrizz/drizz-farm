@@ -134,6 +134,33 @@ func (h *appiumCompatHandlers) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Per-session driver sub-ports. This is the subtle bit that bites
+	// every multi-session Appium setup: each UiAutomator2 session
+	// opens a local port on the host (`appium:systemPort`) to talk
+	// to the uiautomator2 server APK inside the device. Default is
+	// 8200 — two concurrent sessions collide on it and the second
+	// one can't start its instrumentation. appium-device-farm solves
+	// it by injecting a per-session systemPort (and chromedriverPort
+	// for browser tests) into the W3C caps before the session is
+	// created. We do the same here. Ports derived from the drizz
+	// session id's hash keep them stable and non-colliding across
+	// parallel sessions on the same node.
+	subPorts := derivePortsFromSession(sess.ID)
+	if _, ok := cleanCaps["appium:systemPort"]; !ok {
+		cleanCaps["appium:systemPort"] = subPorts.systemPort
+	}
+	if _, ok := cleanCaps["appium:chromedriverPort"]; !ok {
+		cleanCaps["appium:chromedriverPort"] = subPorts.chromedriverPort
+	}
+	if _, ok := cleanCaps["appium:mjpegServerPort"]; !ok {
+		cleanCaps["appium:mjpegServerPort"] = subPorts.mjpegPort
+	}
+	log.Debug().
+		Str("session", sess.ID).
+		Int("systemPort", subPorts.systemPort).
+		Int("chromedriverPort", subPorts.chromedriverPort).
+		Msg("appium-compat: allocated driver sub-ports")
+
 	// 2. Forward the original W3C capabilities (minus drizz:*) to the
 	//    per-session Appium server. Appium responds with its own
 	//    session id which we'll use for all subsequent routing.
@@ -146,7 +173,15 @@ func (h *appiumCompatHandlers) Create(w http.ResponseWriter, r *http.Request) {
 	bodyBytes, _ := json.Marshal(forwardBody)
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
-	upstream := strings.TrimRight(sess.Connection.AppiumURL, "/") + "/session"
+	// Prefer the local 127.0.0.1 URL for proxy forwarding. The
+	// external AppiumURL uses the LAN IP resolved at daemon start,
+	// which goes stale when the host switches Wi-Fi / VPN — the
+	// forward would time out even though Appium was listening.
+	forwardBase := sess.Connection.AppiumLocalURL
+	if forwardBase == "" {
+		forwardBase = sess.Connection.AppiumURL
+	}
+	upstream := strings.TrimRight(forwardBase, "/") + "/session"
 	req2, _ := http.NewRequestWithContext(ctx, "POST", upstream, bytes.NewReader(bodyBytes))
 	req2.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req2)
@@ -215,7 +250,11 @@ func (h *appiumCompatHandlers) Proxy(w http.ResponseWriter, r *http.Request) {
 	if upstreamPath == "" {
 		upstreamPath = "/"
 	}
-	upstream := strings.TrimRight(sess.Connection.AppiumURL, "/") + upstreamPath
+	proxyBase := sess.Connection.AppiumLocalURL
+	if proxyBase == "" {
+		proxyBase = sess.Connection.AppiumURL
+	}
+	upstream := strings.TrimRight(proxyBase, "/") + upstreamPath
 	if r.URL.RawQuery != "" {
 		upstream += "?" + r.URL.RawQuery
 	}
@@ -340,6 +379,66 @@ func extractDrizzCaps(caps map[string]any) (session.CreateSessionRequest, map[st
 		}
 	}
 	return out, clean
+}
+
+// sessionPorts bundles the per-session driver sub-ports we inject
+// into the forwarded W3C caps. Modelled on appium-device-farm's
+// PortManager (src/helpers.ts) — parallel sessions need non-colliding
+// systemPort / chromedriverPort / mjpegServerPort or UiAutomator2's
+// instrumentation can't bind on the host side.
+type sessionPorts struct {
+	systemPort       int
+	chromedriverPort int
+	mjpegPort        int
+}
+
+// derivePortsFromSession maps a session id to stable, non-colliding
+// driver sub-ports. We hash the sid and spread it across three port
+// bands that don't overlap each other or the default Appium port (4723).
+//
+// Ranges chosen to stay above Appium's defaults but below 32k so
+// they survive most firewall / sudo-free environments:
+//
+//	systemPort       8200–8299   (100 slots — uiautomator2 default is 8200)
+//	chromedriverPort 9515–9614   (100 slots — chromedriver default is 9515)
+//	mjpegServerPort  7810–7909   (100 slots)
+//
+// Using the sid hash means parallel sessions from the same request
+// burst land on different slots without the handler needing to
+// coordinate with anyone else — collision probability for N<100
+// sessions is negligible and self-contained within this node.
+func derivePortsFromSession(sid string) sessionPorts {
+	var h uint32
+	for i := 0; i < len(sid); i++ {
+		h = h*31 + uint32(sid[i])
+	}
+	return sessionPorts{
+		systemPort:       8200 + int(h%100),
+		chromedriverPort: 9515 + int((h/100)%100),
+		mjpegPort:        7810 + int((h/10000)%100),
+	}
+}
+
+// DrizzSessionID returns the drizz session ID that a given Appium
+// session ID maps to. GET /wd/hub/session/{sid}/drizz-session-id.
+// Clients driving us via /wd/hub use the Appium-issued SID everywhere
+// — Selenium stashes it as driver.session_id — but the drizz-farm
+// REST API (GPS / network / battery / artifacts) keys on the drizz
+// SID. Without this lookup, tests have to reach inside Selenium's
+// internals or parse logs to get the drizz id. This endpoint gives
+// them a clean path.
+func (h *appiumCompatHandlers) DrizzSessionID(w http.ResponseWriter, r *http.Request) {
+	sid := chi.URLParam(r, "sid")
+	drizzID, ok := h.lookup(sid)
+	if !ok {
+		wdError(w, 404, "unknown appium session id")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"appium_session_id": sid,
+		"drizz_session_id":  drizzID,
+	})
 }
 
 // parseWDSessionID extracts `sessionId` or `value.sessionId` from an

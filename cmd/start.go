@@ -136,6 +136,17 @@ func runStart(cmd *cobra.Command, args []string) error {
 	}
 	log.Info().Str("sdk", sdk.Root).Msg("android SDK detected")
 
+	// Propagate the resolved SDK paths back into cfg so downstream
+	// components (broker → Appium manager) can hand them to spawned
+	// subprocesses. Without this, Appium children inherit a bare
+	// launchd / nohup env and their UiAutomator2 driver fails with
+	// "Neither ANDROID_HOME nor ANDROID_SDK_ROOT was exported".
+	cfg.SDK.Root = sdk.Root
+	cfg.SDK.ADB = sdk.ADBPath()
+	cfg.SDK.Emulator = sdk.EmulatorPath()
+	cfg.SDK.AVDManager = sdk.AVDManagerPath()
+	cfg.SDK.SDKManager = sdk.SDKManagerPath()
+
 	// Warn if Xcode CLI tools missing on macOS (emulator may need it)
 	if runtime.GOOS == "darwin" {
 		if out, err := exec.Command("xcode-select", "-p").CombinedOutput(); err != nil || len(strings.TrimSpace(string(out))) == 0 {

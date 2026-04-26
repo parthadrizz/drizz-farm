@@ -89,6 +89,13 @@ func (e *EmulatorController) Boot(ctx context.Context, avdName string, opts Boot
 		args = append(args, "-snapshot", snapName, "-no-snapshot-save")
 	}
 
+	// -writable-system lets `adb root && adb remount` succeed so the
+	// daemon can install the mitmproxy CA into /system/etc/security/
+	// cacerts at session start (required for HTTPS interception when
+	// drizz:capture_network=true). Cheap to leave on — emulator builds
+	// are userdebug and don't restrict /system layout without it.
+	args = append(args, "-writable-system")
+
 	cmd, err := e.runner.Start(ctx, e.sdk.EmulatorPath(), args...)
 	if err != nil {
 		return nil, fmt.Errorf("boot emulator %s: %w", avdName, err)
